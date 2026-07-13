@@ -27,24 +27,24 @@ bun run Scripts/ComputeSpike.ts 512  # benchmark TS vs Go FFI matmul
 
 ## Architecture (layered, `Brain/`)
 
-| Layer | What it does |
-|---|---|
-| `Config/` | Zod-validated config; `Constants.ts` is the single source of defaults; derive + hash + freeze |
-| `Tensor/` `Autograd/` | Float64 tensors + reverse-mode autograd (topological backward); `GradCheck` is the oracle |
-| `Ops/` | Core differentiable ops (matmul, softmax, norms, RoPE, SwiGLU, cross-entropy…) |
-| `Nn/` | `Shahd` transformer: embeddings, multi-head attention (+RoPE/GQA), MLP, blocks, weight tying |
-| `Optim/` | Adam/AdamW, grad clipping, LR schedule |
-| `Tokenizer/` | Char + byte-level BPE (no-OOV), code-aware pretokenization, special tokens |
-| `Data/` | Corpus pipeline: license allowlist, MinHash dedup, quality filter, decontamination, FIM, `CorpusBuilder` |
-| `Training/` | Training step, gradient accumulation, eval loop (bits-per-byte), train loop |
-| `Sampling/` | Temperature/top-k/top-p/min-p sampling, generation, **KV-cache** (numerically exact) |
-| `Checkpoint/` | Self-describing checkpoints (weights + optimizer + RNG + config + hash) |
-| `Safety/` | Controllable content-safety filter + resource limits + `GuardedGenerate` (absolute priority) |
-| `Sft/` | Chat template + loss masking, task taxonomy, tool-use exemplars |
-| `Eval/` `Rl/` | pass@k, sandboxed code executor, RLVR rejection sampling |
-| `Serving/` | Tool protocol, **rich tool system** (`Tools/`), agent loop, OpenAI-compatible server |
-| `Reasoning/` | Speculative decoding, self-consistency, tree-of-thoughts, thinking-mode |
-| `ComputeBackend/` | Pluggable numeric backend seam: TS, Go subprocess, Go FFI (in-process, 2–8× on CPU) |
+| Layer                     | What it does                                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Config/`               | Zod-validated config;`Constants.ts` is the single source of defaults; derive + hash + freeze            |
+| `Tensor/` `Autograd/` | Float64 tensors + reverse-mode autograd (topological backward);`GradCheck` is the oracle                |
+| `Ops/`                  | Core differentiable ops (matmul, softmax, norms, RoPE, SwiGLU, cross-entropy…)                           |
+| `Nn/`                   | `Shahd` transformer: embeddings, multi-head attention (+RoPE/GQA), MLP, blocks, weight tying            |
+| `Optim/`                | Adam/AdamW, grad clipping, LR schedule                                                                    |
+| `Tokenizer/`            | Char + byte-level BPE (no-OOV), code-aware pretokenization, special tokens                                |
+| `Data/`                 | Corpus pipeline: license allowlist, MinHash dedup, quality filter, decontamination, FIM,`CorpusBuilder` |
+| `Training/`             | Training step, gradient accumulation, eval loop (bits-per-byte), train loop                               |
+| `Sampling/`             | Temperature/top-k/top-p/min-p sampling, generation,**KV-cache** (numerically exact)                 |
+| `Checkpoint/`           | Self-describing checkpoints (weights + optimizer + RNG + config + hash)                                   |
+| `Safety/`               | Controllable content-safety filter + resource limits +`GuardedGenerate` (absolute priority)             |
+| `Sft/`                  | Chat template + loss masking, task taxonomy, tool-use exemplars                                           |
+| `Eval/` `Rl/`         | pass@k, sandboxed code executor, RLVR rejection sampling                                                  |
+| `Serving/`              | Tool protocol,**rich tool system** (`Tools/`), agent loop, OpenAI-compatible server               |
+| `Reasoning/`            | Speculative decoding, self-consistency, tree-of-thoughts, thinking-mode                                   |
+| `ComputeBackend/`       | Pluggable numeric backend seam: TS, Go subprocess, Go FFI (in-process, 2–8× on CPU)                     |
 
 ## Conventions (enforced by CI)
 
