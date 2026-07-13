@@ -56,8 +56,8 @@ export const CompactTool: Tool = {
   Execute: (Arguments, Context) => {
     if (Context?.Session === undefined) return Err("compact unavailable (no session)");
     const Keep = Math.max(1, Math.trunc(OptionalNumber(Arguments, "keep", 4)));
-    const Dropped = Context.Session.Compact(Keep);
-    return { compacted: true, droppedTurns: Dropped, kept: Keep };
+    const Dropped = Context.Session.Compact(Keep, Context.Summarize);
+    return { compacted: true, droppedTurns: Dropped, kept: Keep, summarized: Context.Summarize !== undefined };
   },
 };
 

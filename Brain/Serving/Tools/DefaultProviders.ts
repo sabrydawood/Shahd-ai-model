@@ -7,6 +7,7 @@ import { SeededRng } from "../../Random/SeededRng.ts";
 import type { MemoryStore, ToolContext, ToolRegistryView } from "./ToolTypes.ts";
 import type { Workspace } from "./Workspace.ts";
 import type { ChatSession } from "../ChatSession.ts";
+import { ExtractiveSummarizer } from "../Compaction.ts";
 
 export class InMemoryMemoryStore implements MemoryStore {
   private Map = new Map<string, string>();
@@ -40,6 +41,7 @@ export function DefaultToolContext(Parts: ContextParts = {}): ToolContext {
     Workspace: Parts.Workspace,
     MaxFileBytes: Parts.MaxFileBytes ?? 262144,
     Memory: new InMemoryMemoryStore(),
+    Summarize: ExtractiveSummarizer, // compact summarizes by default; inject a model-backed one to override
     Clock: () => FixedEpochMs,
     Rng: { NextU32: () => Rng.NextUint32() },
   };

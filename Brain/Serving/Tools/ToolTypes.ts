@@ -4,6 +4,7 @@
 // side-effecting tools (user_ask, web_search) share one registry and one agent loop.
 
 import type { ChatSession } from "../ChatSession.ts";
+import type { Summarizer } from "../Compaction.ts";
 import type { Workspace } from "./Workspace.ts";
 
 export type ToolResult = Record<string, unknown>;
@@ -35,6 +36,7 @@ export type MemoryStore = {
 // default, absent (so nothing can hang or reach out unless a provider is supplied).
 export type ToolContext = {
   Session?: ChatSession; // control tools (compact) read/rewrite the running conversation
+  Summarize?: Summarizer; // compact uses this to summarize dropped turns (else structural elision)
   Registry?: ToolRegistryView; // list_tools introspects the live registry
   Workspace?: Workspace; // file tools resolve through this (traversal-guarded)
   MaxFileBytes?: number; // per-file byte cap for file tools
