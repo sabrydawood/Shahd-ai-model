@@ -55,7 +55,7 @@ bun run Scripts/ComputeSpike.ts 512  # benchmark TS vs Go FFI matmul
 5. **Acyclic imports**, explicit named barrels (no `index.ts`).
 
 Full rules: [Docs/CONVENTIONS.md](Docs/CONVENTIONS.md). Design: [Docs/ARCHITECTURE.md](Docs/ARCHITECTURE.md).
-Where it's going: [Docs/ROADMAP.md](Docs/ROADMAP.md).
+File-by-file layout: [Docs/STRUCTURE.md](Docs/STRUCTURE.md). Where it's going: [Docs/ROADMAP.md](Docs/ROADMAP.md).
 
 ## Safety
 
