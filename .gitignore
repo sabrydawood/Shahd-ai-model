@@ -40,11 +40,9 @@ GoKernels/*.exe
 hello.c
 *.exe
 
-Plan/ARCHITECTURE.md
-Plan/CAPABILITIES.md
-Plan/CONVENTIONS.md
-Plan/PHASE1.md
-Plan/REVIEW.md
-Plan/SPEC.md
 App/nano-gpt.ts
+
+# Local-only working notes — never tracked
+Plan/
+CLAUDE.md
 
