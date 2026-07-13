@@ -40,10 +40,15 @@ function LayerNormRow(X: Float64Array, Gamma: Float64Array, Beta: Float64Array, 
 /** Process one token at absolute Position, updating the cache; returns next-token logits [VocabSize]. */
 export function CachedForwardStep(Model: Shahd, Cache: KvCache, TokenId: number, Position: number): Float64Array {
   const Cfg = Model.Config;
-  if (Cfg.Model.PositionScheme !== "Learned" || Cfg.Model.NormKind !== "LayerNorm" || Cfg.Model.MlpKind !== "Relu") {
+  if (
+    Cfg.Model.PositionScheme !== "Learned" ||
+    Cfg.Model.NormKind !== "LayerNorm" ||
+    Cfg.Model.MlpKind !== "Relu" ||
+    Cfg.Derived.KvHeads !== Cfg.Model.NumHeads
+  ) {
     throw new Error(
-      "CachedForwardStep: the KV-cache path currently supports only the Learned/LayerNorm/Relu " +
-        "architecture; use the uncached Generate for the modern (RoPE/RMSNorm/SwiGLU) stack.",
+      "CachedForwardStep: the KV-cache path currently supports only the Learned/LayerNorm/Relu/MHA " +
+        "architecture; use the uncached Generate for the modern (RoPE/RMSNorm/SwiGLU/GQA) stack.",
     );
   }
   const E = Cfg.Model.EmbedDim;

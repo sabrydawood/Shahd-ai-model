@@ -6,7 +6,7 @@
 import type { ShahdConfig, DerivedConfig } from "./ConfigTypes.ts";
 
 export function DeriveConfig(Config: ShahdConfig): DerivedConfig {
-  const { EmbedDim, NumHeads, NumLayers, MlpRatio, InitScale, UseScaledResidualInit } = Config.Model;
+  const { EmbedDim, NumHeads, NumLayers, MlpRatio, InitScale, UseScaledResidualInit, KvHeads } = Config.Model;
 
   const HeadDim = EmbedDim / NumHeads; // integer — guaranteed by ValidateConfig's superRefine
 
@@ -15,5 +15,6 @@ export function DeriveConfig(Config: ShahdConfig): DerivedConfig {
     AttentionScale: 1 / Math.sqrt(HeadDim), // scale by per-head key dim, NOT full EmbedDim (L4)
     MlpHidden: Math.round(EmbedDim * MlpRatio),
     ResidualInitScale: UseScaledResidualInit ? InitScale / Math.sqrt(2 * NumLayers) : InitScale,
+    KvHeads: KvHeads ?? NumHeads, // GQA: shared K/V heads; MHA when unset
   };
 }

@@ -24,6 +24,7 @@ export const ModelSchema = z.object({
   PositionScheme: z.enum(["Learned", "Rope"]), // learned absolute vs rotary positions
   NormKind: z.enum(["LayerNorm", "RmsNorm"]),
   MlpKind: z.enum(["Relu", "SwiGlu", "GeGlu"]),
+  KvHeads: z.number().int().positive().optional(), // GQA: shared K/V heads; omit => = NumHeads (MHA)
 });
 
 export const OptimizerSchema = z.object({
@@ -94,6 +95,13 @@ export const ShahdConfigSchema = z
         code: z.ZodIssueCode.custom,
         path: ["Model", "PositionScheme"],
         message: `RoPE requires an even head dim; EmbedDim/NumHeads = ${Config.Model.EmbedDim / Config.Model.NumHeads} is odd.`,
+      });
+    }
+    if (Config.Model.KvHeads !== undefined && Config.Model.NumHeads % Config.Model.KvHeads !== 0) {
+      Ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["Model", "KvHeads"],
+        message: `NumHeads (${Config.Model.NumHeads}) must be divisible by KvHeads (${Config.Model.KvHeads}).`,
       });
     }
     if (Config.Schedule.WarmupSteps > Config.Schedule.MaxSteps) {

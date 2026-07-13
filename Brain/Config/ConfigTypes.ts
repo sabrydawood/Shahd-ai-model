@@ -16,6 +16,7 @@ export type DerivedConfig = {
   AttentionScale: number; // 1 / sqrt(HeadDim)  ← the L4-safe scale
   MlpHidden: number; // round(EmbedDim * MlpRatio)
   ResidualInitScale: number; // InitScale / sqrt(2 * NumLayers) when scaled-residual init is on
+  KvHeads: number; // effective K/V heads (GQA); = NumHeads when not overridden (MHA)
 };
 
 /** The frozen, self-describing config threaded through the whole system. */

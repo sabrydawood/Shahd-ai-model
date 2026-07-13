@@ -36,6 +36,17 @@ test("RoPE config validation rejects an odd head dim", () => {
   ).toThrow();
 });
 
+test("full-model backward gradchecks with GQA (KvHeads < NumHeads)", () => {
+  const Model = Build({ EmbedDim: 16, NumLayers: 1, NumHeads: 4, KvHeads: 2, BlockSize: 8, VocabSize: 9, MlpRatio: 2 });
+  expect(GradcheckModel(Model)).toBe(true);
+});
+
+test("GQA validation rejects KvHeads not dividing NumHeads", () => {
+  expect(() =>
+    LoadConfig({ Overrides: { Model: { NumHeads: 4, KvHeads: 3 } }, UseCli: false, UseEnv: false }),
+  ).toThrow();
+});
+
 test("modern-stack model generates (uncached); cached path guards", () => {
   const Model = Build({ EmbedDim: 8, NumLayers: 1, NumHeads: 2, BlockSize: 8, VocabSize: 10, MlpRatio: 2, PositionScheme: "Rope", NormKind: "RmsNorm", MlpKind: "SwiGlu" });
   const Out = Generate(Model, [1, 2, 3], 4, DefaultSampling, new SeededRng(1));
