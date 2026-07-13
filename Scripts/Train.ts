@@ -17,6 +17,7 @@ import { TrainLoop } from "../Brain/Training/TrainLoop.ts";
 import { Logger } from "../Brain/Logging/Logger.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
+import { SaveCheckpoint } from "../Brain/Checkpoint/CheckpointWriter.ts";
 
 const SampleCode = `function add(a, b) {
   return a + b;
@@ -77,6 +78,19 @@ RunLogger.Log({
 });
 
 TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger);
+
+// Save a final checkpoint (weights + optimizer + RNG + config + char vocab so it can be sampled).
+const SaveArg = process.argv.slice(2).find((A) => A.startsWith("--Save="));
+const SavePath = SaveArg ? SaveArg.slice("--Save=".length) : "Checkpoints/Last.ckpt";
+SaveCheckpoint(
+  SavePath,
+  Model,
+  Optimizer,
+  Rng,
+  { FinalStep: Config.Schedule.MaxSteps },
+  { Kind: "Char", Chars: Tokenizer.GetVocabChars() },
+);
+RunLogger.Log({ Event: "saved", Path: SavePath });
 
 const Generated = Generate(
   Model,

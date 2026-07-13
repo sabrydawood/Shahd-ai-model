@@ -21,6 +21,11 @@ export class CharTokenizer implements Tokenizer {
     return new CharTokenizer(Distinct);
   }
 
+  /** The vocab char list (for persisting in a checkpoint so it can be rebuilt without the corpus). */
+  GetVocabChars(): string[] {
+    return this.Itos.slice();
+  }
+
   Encode(Text: string): number[] {
     const Ids: number[] = [];
     for (const Ch of Array.from(Text)) {
