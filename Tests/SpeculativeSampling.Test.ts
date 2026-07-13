@@ -7,14 +7,30 @@ import { ProbsFromLogits, SampleFromDistribution } from "../Brain/Sampling/Distr
 import { SampleFromLogits } from "../Brain/Sampling/Sampler.ts";
 import { SeededRng } from "../Brain/Random/SeededRng.ts";
 
-function TinyModel(NumLayers: number, Seed: number): Shahd {
+function TinyModel(NumLayers: number, Seed: number, BlockSize = 32): Shahd {
   const Config = LoadConfig({
-    Overrides: { Model: { VocabSize: 20, EmbedDim: 16, NumLayers, NumHeads: 2, BlockSize: 32 } },
+    Overrides: { Model: { VocabSize: 20, EmbedDim: 16, NumLayers, NumHeads: 2, BlockSize } },
     UseCli: false,
     UseEnv: false,
   });
   return new Shahd(Config, CreateRngStreams(Seed).InitRng);
 }
+
+test("ProbsFromLogits returns a one-hot argmax when Temperature<=0 (greedy contract honored)", () => {
+  const Logits = new Float64Array([0.1, 5.0, 0.2, -1, 3.0]);
+  const Probs = ProbsFromLogits(Logits, 0, 5, { Temperature: 0, TopK: 0, TopP: 1 });
+  expect(Probs[1]).toBe(1); // the argmax
+  expect(Probs[0]).toBe(0);
+  expect(Probs[4]).toBe(0);
+});
+
+test("speculative sampling works when the draft has a smaller BlockSize than the target", () => {
+  const Target = TinyModel(2, 7, 32);
+  const Draft = TinyModel(1, 11, 8); // smaller context than the target
+  const Prompt = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // longer than the draft's BlockSize
+  const Result = SpeculativeSample(Target, Draft, Prompt, 5, { Temperature: 1, TopK: 0, TopP: 1 }, new SeededRng(1), 4);
+  expect(Result.Ids.length).toBe(Prompt.length + 5); // no crash; full sequence produced
+});
 
 test("refactored sampler still matches a direct distribution sample (behavior preserved)", () => {
   const Rng1 = new SeededRng(5);

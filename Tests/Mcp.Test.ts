@@ -34,6 +34,14 @@ test("MCP client initializes, lists, and calls tools", async () => {
   expect(Result.content[0].text).toContain("hi");
 });
 
+test("concurrent first calls share a single initialize handshake (no duplicate init)", async () => {
+  const Transport = new MockTransport();
+  const Client = new McpClient(Transport);
+  await Promise.all([Client.ListTools(), Client.CallTool("echo", {}), Client.ListTools()]);
+  expect(Transport.Calls.filter((C) => C === "initialize").length).toBe(1);
+  expect(Transport.Notifications.filter((N) => N === "notifications/initialized").length).toBe(1);
+});
+
 test("MCP tool bridge exposes server tools as agent tools in a registry", async () => {
   const Client = new McpClient(new MockTransport());
   const Registry = new ToolRegistry();

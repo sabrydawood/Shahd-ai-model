@@ -77,3 +77,18 @@ test("dedup by content hash: re-ingesting identical content does not duplicate",
   await IngestDocuments([One, One], Store, "2026-07-13T00:00:00.000Z");
   expect(await Store.Count()).toBe(1);
 });
+
+test("provenance-aware dedup: identical content from different origins coexist (no tier clobber)", async () => {
+  const Store = new InMemoryDocumentStore();
+  await IngestDocuments(
+    [
+      { Source: "local", License: "MIT", Lang: "ts", Content: Clean, Provenance: "a.ts", Origin: "local" },
+      { Source: "web", License: "unknown", Lang: "ts", Content: Clean, Provenance: "http://x", Origin: "web-general" },
+    ],
+    Store,
+    "2026-07-13T00:00:00.000Z",
+  );
+  expect(await Store.Count()).toBe(2); // the web copy does NOT overwrite the local one
+  expect((await Store.ByTier("Filtered")).length).toBe(1); // local MIT stays training-eligible
+  expect((await Store.ByTier("Raw")).length).toBe(1); // general web stays isolated
+});

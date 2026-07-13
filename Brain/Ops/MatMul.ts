@@ -41,9 +41,11 @@ export function MatMul(A: Tensor, B: Tensor): Tensor {
   }
 
   if (Tape.On) {
+    // Capture the SAME backend the forward used, so a mid-graph SetActiveBackend switch cannot
+    // desync a node's forward and backward (they must run through one backend/precision).
+    const BackwardBackend = Backend;
     Out.BackwardFn = () => {
-      const Back = GetActiveBackend();
-      if (Back === null) {
+      if (BackwardBackend === null) {
         for (let I = 0; I < M; I++) {
           for (let J = 0; J < N; J++) {
             const G = Out.Grad[I * N + J];
@@ -57,10 +59,10 @@ export function MatMul(A: Tensor, B: Tensor): Tensor {
         return;
       }
       // dA = Out.Grad @ Bᵀ  (M,N)@(N,K) -> (M,K)
-      const DA = Back.MatMul(Out.Grad, Transpose(B.Data, K, N), M, N, K);
+      const DA = BackwardBackend.MatMul(Out.Grad, Transpose(B.Data, K, N), M, N, K);
       for (let I = 0; I < M * K; I++) A.Grad[I] += DA[I];
       // dB = Aᵀ @ Out.Grad  (K,M)@(M,N) -> (K,N)
-      const DB = Back.MatMul(Transpose(A.Data, M, K), Out.Grad, K, M, N);
+      const DB = BackwardBackend.MatMul(Transpose(A.Data, M, K), Out.Grad, K, M, N);
       for (let I = 0; I < K * N; I++) B.Grad[I] += DB[I];
     };
   }

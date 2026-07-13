@@ -38,6 +38,7 @@ export function SpeculativeDecodeGreedy(
   return WithTapeOff(() => {
     const Vocab = Target.Config.Model.VocabSize;
     const BlockSize = Target.Config.Model.BlockSize;
+    const DraftBlockSize = Draft.Config.Model.BlockSize; // the draft may have a smaller context
     const DummyRng = new SeededRng(0); // greedy => unused
     const Ids = [...PromptIds];
     let TargetCalls = 0;
@@ -53,7 +54,7 @@ export function SpeculativeDecodeGreedy(
       const Proposed: number[] = [];
       const Work = [...Ids];
       for (let I = 0; I < G; I++) {
-        const Logits = Draft.Forward(Work.slice(-BlockSize));
+        const Logits = Draft.Forward(Work.slice(-DraftBlockSize));
         const Tok = ArgmaxAt(Logits.Data, Logits.Rows - 1, Vocab, DummyRng);
         Proposed.push(Tok);
         Work.push(Tok);

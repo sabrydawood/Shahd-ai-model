@@ -31,15 +31,19 @@ export async function IngestDocuments(
   for (const Input of Inputs) {
     const Decision = ClassifyDocument(Input.License, Input.Content, Input.Origin);
     const ContentHash = createHash("sha256").update(Input.Content).digest("hex").slice(0, 32);
+    // The dedup/primary key includes Origin + License so provenance-distinct copies of identical
+    // bytes do NOT overwrite each other (a web-general Raw copy must not clobber a local Filtered
+    // one, and a Rejected doc must not be "laundered" into Filtered by re-tagging its license).
+    const Id = createHash("sha256").update(`${Input.Origin}\0${Input.License}\0${Input.Content}`).digest("hex").slice(0, 32);
     const Record: DocumentRecord = {
-      Id: ContentHash,
+      Id,
       Tier: Decision.Tier,
       Origin: Input.Origin,
       Source: Input.Source,
       License: Input.License,
       Lang: Input.Lang,
       Content: Input.Content,
-      Bytes: Input.Content.length,
+      Bytes: Buffer.byteLength(Input.Content, "utf8"),
       QualityScore: Decision.QualityScore,
       ContentHash,
       Embedding: HashingEmbedding(Input.Content, EmbeddingDim),

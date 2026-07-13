@@ -18,13 +18,16 @@ export function GetActiveBackend(): ComputeBackend | null {
   return Active;
 }
 
-/** Swap the active backend at runtime; pass null to return to the inline CPU f64 path. */
+/** Swap the active backend at runtime; pass null to return to the inline CPU f64 path. This is the
+ *  single owner of the Go FFI DLL handle: it closes an outgoing FFI backend and tracks a new one,
+ *  so the handle is managed no matter how the backend is set (config or a direct call). */
 export function SetActiveBackend(Backend: ComputeBackend | null): void {
   if (ActiveFfi !== null && Backend !== ActiveFfi) {
-    ActiveFfi.Close();
+    ActiveFfi.Close(); // close the outgoing FFI DLL handle
     ActiveFfi = null;
   }
   Active = Backend;
+  if (Backend instanceof GoFfiBackend) ActiveFfi = Backend;
 }
 
 export type BackendChoice = { Chosen: string; FellBack: boolean };
@@ -53,8 +56,7 @@ export function ActivateFromConfig(Config: ResolvedConfig): BackendChoice {
   if (C.Backend === "GoFfi") {
     const Ffi = C.Precision === "F64" ? TryGoFfi() : null; // Go f32 kernel not built yet
     if (Ffi !== null) {
-      ActiveFfi = Ffi;
-      SetActiveBackend(Ffi);
+      SetActiveBackend(Ffi); // SetActiveBackend owns ActiveFfi tracking + closing the previous handle
       return { Chosen: "GoFfi/F64", FellBack: false };
     }
     if (!C.FallbackToCpu) throw new Error("GoFfi backend unavailable and Compute.FallbackToCpu is false");

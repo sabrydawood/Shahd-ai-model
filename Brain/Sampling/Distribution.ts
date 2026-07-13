@@ -7,14 +7,29 @@
 import type { SeededRng } from "../Random/SeededRng.ts";
 
 export type SamplingOptions = {
-  Temperature: number; // <= 0 => greedy argmax (handled by the caller, not here)
+  Temperature: number; // <= 0 => greedy argmax (honored here: a one-hot distribution at the argmax)
   TopK: number; // 0 => disabled
   TopP: number; // 1 => disabled
 };
 
-/** Temperature-scaled softmax with top-k then top-p, renormalized over the kept set. */
+/** Temperature-scaled softmax with top-k then top-p, renormalized over the kept set. Temperature<=0
+ *  returns a one-hot distribution at the argmax (so every consumer gets the documented greedy). */
 export function ProbsFromLogits(Logits: Float64Array, Offset: number, VocabSize: number, Options: SamplingOptions): Float64Array {
-  const Temperature = Options.Temperature > 0 ? Options.Temperature : 1;
+  if (Options.Temperature <= 0) {
+    const Greedy = new Float64Array(VocabSize);
+    let Best = 0;
+    let BestVal = -Infinity;
+    for (let J = 0; J < VocabSize; J++) {
+      const Val = Logits[Offset + J];
+      if (Val > BestVal) {
+        BestVal = Val;
+        Best = J;
+      }
+    }
+    Greedy[Best] = 1;
+    return Greedy;
+  }
+  const Temperature = Options.Temperature;
   const Probs = new Float64Array(VocabSize);
   let Max = -Infinity;
   for (let J = 0; J < VocabSize; J++) {

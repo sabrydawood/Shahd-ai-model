@@ -48,6 +48,7 @@ export function SpeculativeSample(
   return WithTapeOff(() => {
     const Vocab = Target.Config.Model.VocabSize;
     const BlockSize = Target.Config.Model.BlockSize;
+    const DraftBlockSize = Draft.Config.Model.BlockSize; // the draft may have a smaller context
     const Ids = [...PromptIds];
     let TargetCalls = 0;
     let DraftTokens = 0;
@@ -63,7 +64,7 @@ export function SpeculativeSample(
       const QDistributions: Float64Array[] = [];
       const Work = [...Ids];
       for (let I = 0; I < G; I++) {
-        const Logits = Draft.Forward(Work.slice(-BlockSize));
+        const Logits = Draft.Forward(Work.slice(-DraftBlockSize));
         const Q = ProbsFromLogits(Logits.Data, (Logits.Rows - 1) * Vocab, Vocab, Options);
         const Token = SampleFromDistribution(Q, Rng);
         Proposed.push(Token);
