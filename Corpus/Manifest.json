@@ -1,0 +1,13 @@
+{
+  "Note": "Original code authored for the Shahd seed corpus; owned and permissively licensed. Two entries are deliberately non-permissive/low-quality to exercise the pipeline filters.",
+  "Documents": [
+    { "Source": "shahd-seed", "License": "MIT", "Path": "Corpus/Seed/Strings.ts", "Lang": "typescript" },
+    { "Source": "shahd-seed", "License": "MIT", "Path": "Corpus/Seed/StringsCopy.ts", "Lang": "typescript" },
+    { "Source": "shahd-seed", "License": "MIT", "Path": "Corpus/Seed/Numbers.ts", "Lang": "typescript" },
+    { "Source": "shahd-seed", "License": "Apache-2.0", "Path": "Corpus/Seed/Queue.go", "Lang": "go" },
+    { "Source": "shahd-seed", "License": "0BSD", "Path": "Corpus/Seed/Fib.py", "Lang": "python" },
+    { "Source": "shahd-seed", "License": "MIT", "Path": "Corpus/Seed/Vector.rs", "Lang": "rust" },
+    { "Source": "shahd-seed", "License": "MIT", "Path": "Corpus/Seed/Minified.js", "Lang": "javascript" },
+    { "Source": "third-party", "License": "GPL-3.0", "Path": "Corpus/Seed/CopyleftSample.c", "Lang": "c" }
+  ]
+}

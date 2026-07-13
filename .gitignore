@@ -7,13 +7,17 @@ dist/
 build/
 *.tsbuildinfo
 
-# Runtime artifacts (trained weights, logs, checkpoints, corpora)
+# Runtime artifacts (trained weights, logs, checkpoints, generated corpora)
 Checkpoints/
 Runs/
-Corpus/
 *.log
 *.ckpt
 *.safetensors
+
+# Corpus: track the hand-authored permissive seed + manifest; ignore generated builds
+Corpus/*
+!Corpus/Seed
+!Corpus/Manifest.json
 
 # Environment
 .env

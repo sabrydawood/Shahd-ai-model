@@ -7,7 +7,7 @@ import importPlugin from "eslint-plugin-import";
 
 export default tseslint.config(
   {
-    ignores: ["node_modules/**", "App/**", "dist/**", "build/**", "GoKernels/**"],
+    ignores: ["node_modules/**", "App/**", "dist/**", "build/**", "GoKernels/**", "Corpus/**"],
   },
   ...tseslint.configs.recommended,
   {
