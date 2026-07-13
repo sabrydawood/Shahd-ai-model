@@ -10,3 +10,5 @@ export { BuildReport, RenderReportText } from "./QualityReport.ts";
 export type { FoundryReport } from "./QualityReport.ts";
 export { IngestDocuments, ExportTrainingText } from "./Ingest.ts";
 export type { SourceInput, IngestStats } from "./Ingest.ts";
+export { CreateDashboardHandler, StartDashboard } from "./Dashboard.ts";
+export type { DashboardHandler } from "./Dashboard.ts";
