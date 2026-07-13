@@ -4,6 +4,8 @@ import { SpecialTokenizer } from "../Brain/Tokenizer/SpecialTokenizer.ts";
 import { ChatTokens, ChatTokenList, RenderForTraining } from "../Brain/Sft/ChatTemplate.ts";
 import type { ChatMessage } from "../Brain/Sft/ChatTemplate.ts";
 import { BuildTaskMessages } from "../Brain/Sft/TaskTaxonomy.ts";
+import { ToolUseExemplars, BuildToolConversation } from "../Brain/Sft/ToolUseExamples.ts";
+import { ToolTokenList, ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
 import { MaskedCrossEntropy, CrossEntropy } from "../Brain/Ops/OpsBarrel.ts";
 import { Tensor } from "../Brain/Tensor/Tensor.ts";
 import { GradCheck } from "../Brain/Autograd/GradCheck.ts";
@@ -58,4 +60,17 @@ test("BuildTaskMessages produces a system+user+assistant SFT example", () => {
   expect(Messages.length).toBe(3);
   expect(Messages[0].Role).toBe("System");
   expect(Messages[2].Role).toBe("Assistant");
+});
+
+test("tool-use exemplars train the tool-call turn (call format is learned, not hard-coded)", () => {
+  const Messages = BuildToolConversation(ToolUseExemplars[0], "You are Shahd");
+  const Base = CharTokenizer.FromCorpus(Messages.map((M) => M.Content).join(" ")); // cover every char
+  const Tok = new SpecialTokenizer(Base, [...ChatTokenList, ...ToolTokenList]);
+  expect(Messages.length).toBe(5); // system, user, tool-call, result, answer
+  const { Ids, LossMask } = RenderForTraining(Messages, Tok);
+  expect(Ids.length).toBe(LossMask.length);
+  // The tool-call sentinel sits inside a trainable (assistant) turn.
+  const CallPos = Ids.indexOf(Tok.Id(ToolTokens.CallStart));
+  expect(CallPos).toBeGreaterThanOrEqual(0);
+  expect(LossMask[CallPos]).toBe(true);
 });

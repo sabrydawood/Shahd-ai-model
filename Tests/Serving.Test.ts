@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { ParseToolCall, FormatToolResult, ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
-import { DefaultToolRegistry, CalculatorTool } from "../Brain/Serving/Tools.ts";
+import { DefaultToolRegistry, CalculatorTool } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 import { ChatSession } from "../Brain/Serving/ChatSession.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
 import { CreateChatHandler } from "../Brain/Serving/InferenceServer.ts";
@@ -18,12 +18,12 @@ test("ToolProtocol parses a tool call and ignores plain text", () => {
   expect(FormatToolResult({ result: 5 })).toContain("5");
 });
 
-test("Tools execute safely (calculator + registry error handling)", () => {
+test("Tools execute safely (calculator + registry error handling)", async () => {
   expect(CalculatorTool.Execute({ a: 2, op: "*", b: 4 })).toEqual({ result: 8 });
   expect(CalculatorTool.Execute({ a: 1, op: "/", b: 0 })).toEqual({ error: "division by zero" });
   const Registry = DefaultToolRegistry();
-  expect(Registry.Run({ Name: "calculator", Arguments: { a: 10, op: "-", b: 3 } })).toEqual({ result: 7 });
-  expect(Registry.Run({ Name: "nope", Arguments: {} })).toEqual({ error: "unknown tool: nope" });
+  expect(await Registry.Run({ Name: "calculator", Arguments: { a: 10, op: "-", b: 3 } })).toEqual({ result: 7 });
+  expect(await Registry.Run({ Name: "nope", Arguments: {} })).toEqual({ error: "unknown tool: nope" });
 });
 
 test("ChatSession renders the running conversation", () => {
@@ -34,7 +34,7 @@ test("ChatSession renders the running conversation", () => {
   expect(Prompt).toContain("hi");
 });
 
-test("AgentLoop runs a tool call then returns the final answer", () => {
+test("AgentLoop runs a tool call then returns the final answer", async () => {
   const Session = new ChatSession("helper");
   Session.AddUser("what is 2 + 3?");
   const Registry = DefaultToolRegistry();
@@ -46,7 +46,7 @@ test("AgentLoop runs a tool call then returns the final answer", () => {
     }
     return "The answer is 5.";
   };
-  const Result = RunAgent(Session, Generate, Registry);
+  const Result = await RunAgent(Session, Generate, Registry);
   expect(Result.ToolCalls.length).toBe(1);
   expect(Result.ToolCalls[0].Name).toBe("calculator");
   expect(Result.FinalText).toContain("5");

@@ -71,6 +71,18 @@ export const LimitsSchema = z.object({
   MaxContextTokens: PositiveInt,
 });
 
+// TOOLS (agent capability gate — the ONE controllable place for tool safety, mirroring Safety).
+// Dangerous surfaces (filesystem, code execution, network) are OFF/read-only by default and can
+// only be widened here. File tools are additionally confined to WorkspaceRoot at runtime.
+export const ToolsSchema = z.object({
+  FileAccess: z.enum(["Off", "ReadOnly", "ReadWrite"]), // filesystem tool capability
+  ExecEnabled: z.boolean(), // register the code-execution (run_code) tool
+  WorkspaceRoot: z.string(), // confinement root for every file tool (traversal is refused)
+  WebSearchEnabled: z.boolean(), // when false, web_search is a clearly-labeled offline stub
+  MaxToolSteps: PositiveInt, // agent-loop step budget
+  MaxFileBytes: PositiveInt, // per-file read/write byte cap
+});
+
 export const ShahdConfigSchema = z
   .object({
     Model: ModelSchema,
@@ -80,6 +92,7 @@ export const ShahdConfigSchema = z
     Tokenizer: TokenizerSchema,
     Safety: SafetySchema,
     Limits: LimitsSchema,
+    Tools: ToolsSchema,
   })
   .superRefine((Config, Ctx) => {
     // L4 guard: attention scale = 1/sqrt(HeadDim) is only correct when heads evenly split EmbedDim.

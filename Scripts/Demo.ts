@@ -16,7 +16,7 @@ import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SafetyPolicy } from "../Brain/Safety/SafetyPolicy.ts";
 import { ChatSession } from "../Brain/Serving/ChatSession.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
-import { DefaultToolRegistry } from "../Brain/Serving/Tools.ts";
+import { DefaultToolRegistry } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 import { ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
 
 const Code = `function add(a, b) { return a + b; }
@@ -64,7 +64,7 @@ console.log("\n[3] Agent tool loop (calculator):");
 const Session = new ChatSession("You are Shahd.");
 Session.AddUser("what is 12 * 9?");
 let Turn = 0;
-const Agent = RunAgent(
+const Agent = await RunAgent(
   Session,
   (): string => {
     Turn++;

@@ -19,6 +19,7 @@ function ExtractShahdConfig(Config: ResolvedConfig): ShahdConfig {
     Tokenizer: Config.Tokenizer,
     Safety: Config.Safety,
     Limits: Config.Limits,
+    Tools: Config.Tools,
   };
 }
 

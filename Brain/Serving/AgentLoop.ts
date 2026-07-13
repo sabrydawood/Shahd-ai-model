@@ -1,14 +1,17 @@
-// Multi-step agent loop (Phase 6): generate -> if the model emitted a tool call, run it and feed
-// the result back -> repeat, until the model produces a final (non-tool) answer or the step budget
-// is hit. The step budget + never-throwing tool runner are the guardrails. `Generator` is injected
-// (the real GuardedGenerate at serving time, a mock in tests) so the loop is model-agnostic.
+// Multi-step agent loop (Phase 6, extended in Phase 7): generate -> if the model emitted a tool
+// call, run it against the injected ToolContext and feed the result back -> repeat, until the model
+// produces a plain (non-tool) answer, calls the Terminal `finish` tool, or the step budget is hit.
+// Async throughout so tools that await (user_ask, web_search) and async generators compose. The
+// step budget + never-throwing registry are the guardrails; `Generate` is injected (GuardedGenerate
+// at serving time, a mock in tests) so the loop stays model-agnostic.
 
 import type { ChatSession } from "./ChatSession.ts";
-import type { ToolRegistry } from "./Tools.ts";
+import type { ToolRegistry } from "./Tools/ToolRegistry.ts";
+import type { ToolContext } from "./Tools/ToolTypes.ts";
 import type { ToolCall } from "./ToolProtocol.ts";
 import { ParseToolCall, FormatToolResult } from "./ToolProtocol.ts";
 
-export type Generator = (Prompt: string) => string;
+export type Generator = (Prompt: string) => string | Promise<string>;
 
 export type AgentResult = {
   FinalText: string;
@@ -17,24 +20,32 @@ export type AgentResult = {
   HitStepLimit: boolean;
 };
 
-export function RunAgent(
+export async function RunAgent(
   Session: ChatSession,
   Generate: Generator,
   Registry: ToolRegistry,
   MaxSteps = 6,
-): AgentResult {
+  Context?: ToolContext,
+): Promise<AgentResult> {
   const ToolCalls: ToolCall[] = [];
   for (let Step = 0; Step < MaxSteps; Step++) {
-    const Generated = Generate(Session.RenderPrompt());
+    const Generated = await Generate(Session.RenderPrompt());
     const Call = ParseToolCall(Generated);
     if (Call === null) {
+      // Plain text is the canonical final answer.
       Session.AddAssistant(Generated);
       return { FinalText: Generated, Steps: Step + 1, ToolCalls, HitStepLimit: false };
     }
     ToolCalls.push(Call);
     Session.AddAssistant(Generated); // record the tool-call turn
-    const Result = Registry.Run(Call); // never throws
+    const Result = await Registry.Run(Call, Context); // never throws
     Session.AddToolResult(FormatToolResult(Result));
+    // The one other terminal path: a successful `finish` (Terminal) tool call ends the loop.
+    const Tool = Registry.Get(Call.Name);
+    if (Tool?.Terminal === true && !("error" in Result)) {
+      const Answer = typeof Result["answer"] === "string" ? Result["answer"] : Generated;
+      return { FinalText: Answer, Steps: Step + 1, ToolCalls, HitStepLimit: false };
+    }
   }
   return { FinalText: "(step budget exhausted)", Steps: MaxSteps, ToolCalls, HitStepLimit: true };
 }

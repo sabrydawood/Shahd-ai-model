@@ -57,4 +57,12 @@ export const DefaultConfig: ShahdConfig = {
     MaxNewTokens: 1024, // hard cap on tokens per generation
     MaxContextTokens: 4096, // hard cap on prompt/context tokens fed to the model
   },
+  Tools: {
+    FileAccess: "ReadOnly", // read files (confined to WorkspaceRoot); no writes until widened
+    ExecEnabled: false, // code execution OFF by default (absolute safety) — opt in explicitly
+    WorkspaceRoot: ".", // file tools cannot escape this root
+    WebSearchEnabled: false, // offline by default; web_search returns a labeled stub
+    MaxToolSteps: 6, // agent-loop budget
+    MaxFileBytes: 262144, // 256 KiB read/write cap
+  },
 };
