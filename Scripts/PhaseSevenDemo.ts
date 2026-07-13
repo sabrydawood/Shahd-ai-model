@@ -25,12 +25,7 @@ import { SafetyPolicy } from "../Brain/Safety/SafetyPolicy.ts";
 import { ChatSession } from "../Brain/Serving/ChatSession.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
 import { ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
-import {
-  BuildToolRegistry,
-  DefaultToolContext,
-  RenderToolManifest,
-  Workspace,
-} from "../Brain/Serving/Tools/ToolsBarrel.ts";
+import { BuildAgentTooling, RenderToolManifest } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 
 // 1) Train on the permissive seed corpus (drops GPL + minified + vendored copy).
 const Manifest = JSON.parse(readFileSync("Corpus/Manifest.json", "utf8")) as { Documents: { Source: string; License: string; Path: string }[] };
@@ -62,20 +57,20 @@ for (let Step = 0; Step < Config.Schedule.MaxSteps; Step++) {
 }
 console.log(`    sample: ${JSON.stringify(Tokenizer.Decode(Generate(Model, Tokenizer.Encode("export function "), 60, { Temperature: 0.6, TopK: 0, TopP: 1 }, Rng.SamplingRng)).slice(0, 70))}`);
 
-// 2) Rich tool agent — tools advertised in the system prompt, multi-step, terminal finish.
-const Registry = BuildToolRegistry({ FileAccess: "ReadOnly", ExecEnabled: false, WebSearchEnabled: false });
-const SystemPrompt = "You are Shahd.\n\n" + RenderToolManifest(Registry.List());
+// 2) Rich tool agent — registry/context/budget built ENTIRELY from Config.Tools (the central gate).
+const Tooling = BuildAgentTooling(Config);
+const SystemPrompt = "You are Shahd.\n\n" + RenderToolManifest(Tooling.Registry.List());
 const Session = new ChatSession(SystemPrompt);
 Session.AddUser("Compute 12*9, remember it as 'area', then finish.");
-const Context = DefaultToolContext({ Session, Registry, Workspace: new Workspace(".") });
+Tooling.Context.Session = Session; // wire the session so control tools (compact) can rewrite it
 const Script = [
   `${ToolTokens.CallStart}{"name":"calculator","arguments":{"a":12,"op":"*","b":9}}${ToolTokens.CallEnd}`,
   `${ToolTokens.CallStart}{"name":"memory_store","arguments":{"key":"area","value":"108"}}${ToolTokens.CallEnd}`,
   `${ToolTokens.CallStart}{"name":"finish","arguments":{"answer":"area = 108, stored."}}${ToolTokens.CallEnd}`,
 ];
 let Turn = 0;
-const Agent = await RunAgent(Session, () => Script[Math.min(Turn++, Script.length - 1)], Registry, 6, Context);
-console.log(`\n[2] Tool agent: ${Registry.List().length} tools available; called ${Agent.ToolCalls.map((C) => C.Name).join(" -> ")}; final: ${JSON.stringify(Agent.FinalText)}`);
+const Agent = await RunAgent(Session, () => Script[Math.min(Turn++, Script.length - 1)], Tooling.Registry, Tooling.MaxSteps, Tooling.Context);
+console.log(`\n[2] Tool agent: ${Tooling.Registry.List().length} tools (from config: FileAccess=${Config.Tools.FileAccess}, exec=${Config.Tools.ExecEnabled}, root='${Config.Tools.WorkspaceRoot}', maxSteps=${Tooling.MaxSteps}); called ${Agent.ToolCalls.map((C) => C.Name).join(" -> ")}; final: ${JSON.stringify(Agent.FinalText)}`);
 
 // 3) Speculative decoding == greedy, but with fewer target forward passes.
 const Prompt = Tokenizer.Encode("const ");

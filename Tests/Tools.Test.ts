@@ -15,9 +15,11 @@ import {
   TextTool,
   UuidTool,
 } from "../Brain/Serving/Tools/ToolsBarrel.ts";
+import { BuildAgentTooling } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
 import { ChatSession } from "../Brain/Serving/ChatSession.ts";
 import { ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
+import { LoadConfig } from "../Brain/Config/LoadConfig.ts";
 
 test("capability gate: exec + file access are off/read-only by the safe default policy", () => {
   const Safe = DefaultToolRegistry();
@@ -117,6 +119,31 @@ test("agent loop: finish is terminal, compact shrinks the session", async () => 
   expect(Result.FinalText).toBe("done!");
   expect(Result.HitStepLimit).toBe(false);
   expect(Result.ToolCalls.length).toBe(1);
+});
+
+test("Config.Tools actually governs behavior end-to-end (root, byte cap, exec, budget)", async () => {
+  const Root = mkdtempSync(join(tmpdir(), "shahd-cfg-"));
+  try {
+    writeFileSync(join(Root, "In.txt"), "0123456789"); // 10 bytes
+    const Config = LoadConfig({
+      Overrides: { Tools: { FileAccess: "ReadWrite", ExecEnabled: true, WorkspaceRoot: Root, MaxFileBytes: 4, MaxToolSteps: 9 } },
+      UseCli: false,
+      UseEnv: false,
+    });
+    const Tooling = BuildAgentTooling(Config);
+    // MaxToolSteps flows from config.
+    expect(Tooling.MaxSteps).toBe(9);
+    // ExecEnabled flows: run_code is registered.
+    expect(Tooling.Registry.Has("run_code")).toBe(true);
+    // WorkspaceRoot flows: reads resolve under the CONFIG root, and escaping it fails.
+    const Escape = await Tooling.Registry.Run({ Name: "file_read", Arguments: { path: "../outside.txt" } }, Tooling.Context);
+    expect(String(Escape["error"])).toContain("escapes workspace");
+    // MaxFileBytes flows: the 10-byte file exceeds the config cap of 4.
+    const Capped = await Tooling.Registry.Run({ Name: "file_read", Arguments: { path: "In.txt" } }, Tooling.Context);
+    expect(String(Capped["error"])).toContain("cap");
+  } finally {
+    rmSync(Root, { recursive: true, force: true });
+  }
 });
 
 test("list_tools + manifest expose the tool surface to the model", async () => {

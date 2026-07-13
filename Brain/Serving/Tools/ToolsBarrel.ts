@@ -24,3 +24,5 @@ export {
   DefaultToolsPolicy,
 } from "./BuildRegistry.ts";
 export type { ToolsPolicy, FileAccess } from "./BuildRegistry.ts";
+export { BuildAgentTooling } from "./AgentTooling.ts";
+export type { AgentTooling } from "./AgentTooling.ts";
