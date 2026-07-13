@@ -10,19 +10,18 @@ import type { HttpJson, FetchBytes } from "./GitHubHttp.ts";
 import { DefaultGitHubJson, DefaultGitHubBytes } from "./GitHubHttp.ts";
 import { FetchRepoFiles } from "./RepoArchive.ts";
 import { AssessRepo, LevelRank } from "./RepoQuality.ts";
-import type { RepoLevel, RepoAssessment } from "./RepoQuality.ts";
+import type { RepoLevel, RepoIngestInfo } from "./RepoQuality.ts";
 import { LangForPath } from "./CodeFileFilter.ts";
 
 type RepoItem = { full_name: string; default_branch: string; license: { spdx_id: string } | null };
 type SearchResult = { items?: RepoItem[] };
 
-export type RepoIngestInfo = { Repo: string; License: string; Assessment: RepoAssessment; Ingested: boolean };
-
 export type GitHubRepoOptions = {
   Token?: string;
   Http?: HttpJson; // repo search (JSON)
   FetchBytes?: FetchBytes; // repo tarball (bytes)
-  MaxFilesPerRepo?: number; // cap so a monorepo can't dominate
+  MaxFilesPerRepo?: number; // cap so a monorepo can't dominate (generous by default)
+  MaxBytesPerRepo?: number; // byte budget per repo
   MinLevel?: RepoLevel; // skip repos below this level
   OnRepo?: (Info: RepoIngestInfo) => void; // progress/reporting hook
 };
@@ -30,7 +29,7 @@ export type GitHubRepoOptions = {
 export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebProvider {
   const Http = Options.Http ?? DefaultGitHubJson(Options.Token);
   const Fetch = Options.FetchBytes ?? DefaultGitHubBytes(Options.Token);
-  const MaxFilesPerRepo = Options.MaxFilesPerRepo ?? 400;
+  const Limits = { MaxFiles: Options.MaxFilesPerRepo, MaxBytes: Options.MaxBytesPerRepo };
   const MinLevel = Options.MinLevel ?? "medium";
 
   return {
@@ -40,7 +39,7 @@ export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebPr
       const Out: SourceInput[] = [];
       for (const Repo of Search.items ?? []) {
         const License = Repo.license?.spdx_id ?? "unknown";
-        const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, MaxFilesPerRepo);
+        const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
         const Assessment = AssessRepo(Files);
         const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
         Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested });

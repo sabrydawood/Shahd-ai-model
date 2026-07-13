@@ -1,19 +1,26 @@
-// Selecting GOOD code files from a repository (M6 quality fix). Naively taking the first files in
-// git-tree order pulls in dotfiles, config, benchmarks, generated stubs, and markup — exactly the
-// low-value data that dilutes a CODE model. These pure predicates keep only substantive source:
-//   - a code-only extension allowlist (markup/style excluded — Shahd is code-specialized),
+// Selecting GOOD code files from a repository (M6/M8). Naively taking the first files in git-tree
+// order pulls in dotfiles, config, benchmarks, generated stubs — the low-value data that dilutes the
+// corpus. These pure predicates keep only substantive source across a broad set of programming AND
+// web/markup/style languages (html/css included):
+//   - a wide extension allowlist,
 //   - path exclusions for non-source dirs (tests, examples, dist, vendor, docs, dotfiles…),
 //   - file exclusions for declarations/minified/generated/config/lockfiles,
 //   - a content gate rejecting tiny stubs, license-header-only files, embedded blobs, and symbol soup.
 // A rank puts real source dirs (src/lib/…) first.
 
-const CodeExtension = /\.(ts|tsx|js|jsx|mjs|cjs|go|py|rs|java|kt|swift|scala|c|cc|cpp|cxx|h|hpp|rb|php|cs|dart|lua|ex|exs)$/i;
+const CodeExtension =
+  /\.(ts|tsx|js|jsx|mjs|cjs|go|py|pyw|rb|php|java|kt|kts|scala|swift|rs|c|cc|cpp|cxx|cs|h|hh|hpp|dart|lua|ex|exs|elm|erl|hs|clj|cljs|cljc|ml|mli|fs|fsx|jl|r|pl|pm|nim|zig|cr|v|groovy|gradle|sql|sh|bash|zsh|ps1|vb|pas|html|htm|css|scss|sass|less|styl|vue|svelte|astro)$/i;
 
 const LangByExtension: Record<string, string> = {
   ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-  go: "go", py: "python", rs: "rust", java: "java", kt: "kotlin", swift: "swift", scala: "scala",
-  c: "c", cc: "cpp", cpp: "cpp", cxx: "cpp", h: "c", hpp: "cpp", rb: "ruby", php: "php", cs: "csharp",
-  dart: "dart", lua: "lua", ex: "elixir", exs: "elixir",
+  go: "go", py: "python", pyw: "python", rb: "ruby", php: "php", java: "java", kt: "kotlin", kts: "kotlin",
+  scala: "scala", swift: "swift", rs: "rust", c: "c", cc: "cpp", cpp: "cpp", cxx: "cpp", cs: "csharp",
+  h: "c", hh: "cpp", hpp: "cpp", dart: "dart", lua: "lua", ex: "elixir", exs: "elixir", elm: "elm",
+  erl: "erlang", hs: "haskell", clj: "clojure", cljs: "clojure", cljc: "clojure", ml: "ocaml", mli: "ocaml",
+  fs: "fsharp", fsx: "fsharp", jl: "julia", r: "r", pl: "perl", pm: "perl", nim: "nim", zig: "zig",
+  cr: "crystal", v: "v", groovy: "groovy", gradle: "groovy", sql: "sql", sh: "shell", bash: "shell",
+  zsh: "shell", ps1: "powershell", vb: "vbnet", pas: "pascal", html: "html", htm: "html", css: "css",
+  scss: "scss", sass: "sass", less: "less", styl: "stylus", vue: "vue", svelte: "svelte", astro: "astro",
 };
 
 // A path segment that means "not substantive product source".

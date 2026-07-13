@@ -9,6 +9,11 @@ import { IsSubstantiveCodePath, IsSubstantiveCodeContent } from "./CodeFileFilte
 
 export type RepoFile = { Path: string; Content: string };
 
+// Generous defaults so a large but organized repo is learned WHOLE; the byte budget only guards
+// against a pathological monorepo. Raise them for truly massive repos.
+export type RepoLimits = { MaxFiles?: number; MaxBytes?: number };
+export const DefaultRepoLimits: Required<RepoLimits> = { MaxFiles: 8000, MaxBytes: 64_000_000 };
+
 /** GitHub tarballs prefix every entry with "{repo}-{sha}/"; drop that top-level directory. */
 function StripRoot(Name: string): string {
   const Slash = Name.indexOf("/");
@@ -16,9 +21,12 @@ function StripRoot(Name: string): string {
 }
 
 /** Fetch a repo tarball and return its substantive source files (path-filtered + content-gated). */
-export async function FetchRepoFiles(TarballUrl: string, Fetch: FetchBytes, MaxFiles = 400): Promise<RepoFile[]> {
+export async function FetchRepoFiles(TarballUrl: string, Fetch: FetchBytes, Limits: RepoLimits = {}): Promise<RepoFile[]> {
+  const MaxFiles = Limits.MaxFiles ?? DefaultRepoLimits.MaxFiles;
+  const MaxBytes = Limits.MaxBytes ?? DefaultRepoLimits.MaxBytes;
   const Items = await parseTarGzip(await Fetch(TarballUrl));
   const Out: RepoFile[] = [];
+  let Bytes = 0;
   for (const Item of Items) {
     if (Item.type !== "file") continue;
     const Path = StripRoot(Item.name);
@@ -26,7 +34,8 @@ export async function FetchRepoFiles(TarballUrl: string, Fetch: FetchBytes, MaxF
     const Content = Item.text ?? new TextDecoder().decode(Item.data);
     if (!IsSubstantiveCodeContent(Content)) continue;
     Out.push({ Path, Content });
-    if (Out.length >= MaxFiles) break;
+    Bytes += Content.length;
+    if (Out.length >= MaxFiles || Bytes >= MaxBytes) break;
   }
   return Out;
 }

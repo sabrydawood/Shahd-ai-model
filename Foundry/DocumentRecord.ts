@@ -7,8 +7,9 @@
 
 export type Tier = "Filtered" | "Raw" | "Rejected";
 
-// Where a document came from — decides tiering. "web-general" is always isolated to Raw.
-export type Origin = "local" | "web-permissive" | "web-general";
+// Where a document came from — decides tiering. "owned" = our own repos (trained on regardless of
+// license, no third-party risk); "web-general" is always isolated to Raw.
+export type Origin = "owned" | "local" | "web-permissive" | "web-general";
 
 export type DocumentRecord = {
   Id: string; // stable id = content hash

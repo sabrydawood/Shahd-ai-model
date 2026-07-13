@@ -16,6 +16,11 @@ export function ClassifyDocument(License: string, Content: string, Origin: Origi
   if (Origin === "web-general") {
     return { Tier: "Raw", QualityScore: Quality.Score, RejectReason: "general web: isolated for inspection, not training-eligible" };
   }
+  if (Origin === "owned") {
+    // Our own code — no third-party licensing risk; keep it if the quality gate passes.
+    if (!Quality.Passed) return { Tier: "Rejected", QualityScore: Quality.Score, RejectReason: `low quality: ${Quality.Reasons.join("; ")}` };
+    return { Tier: "Filtered", QualityScore: Quality.Score, RejectReason: null };
+  }
   if (!IsPermissive(License)) {
     return { Tier: "Rejected", QualityScore: Quality.Score, RejectReason: `non-permissive license: ${License}` };
   }

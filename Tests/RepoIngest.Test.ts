@@ -1,6 +1,18 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { createTarGzip } from "nanotar";
-import { FetchRepoFiles, AssessRepo, CreateGitHubRepoProvider } from "../Foundry/FoundryBarrel.ts";
+import {
+  FetchRepoFiles,
+  AssessRepo,
+  CreateGitHubRepoProvider,
+  CreateLocalRepoProvider,
+  InMemoryDocumentStore,
+  IngestFromWeb,
+  IsSubstantiveCodePath,
+  LangForPath,
+} from "../Foundry/FoundryBarrel.ts";
 import type { HttpJson, FetchBytes, RepoFile } from "../Foundry/FoundryBarrel.ts";
 
 // A substantive source file (>300 chars, passes the content gate), distinct per name.
@@ -50,4 +62,31 @@ test("whole-repo provider ingests every file of a qualifying repo and skips low-
   expect(Docs.length).toBe(5); // all 5 files of the good repo
   expect(Docs.every((D) => D.Source === "acme/good")).toBe(true); // thin repo skipped
   expect(Docs.every((D) => D.Origin === "web-permissive" && D.License === "MIT")).toBe(true);
+});
+
+test("expanded languages: css/html/vue/sql are recognized as code (M8)", () => {
+  expect(IsSubstantiveCodePath("src/styles/main.css")).toBe(true);
+  expect(IsSubstantiveCodePath("src/Page.vue")).toBe(true);
+  expect(IsSubstantiveCodePath("db/schema.sql")).toBe(true);
+  expect(IsSubstantiveCodePath("web/index.html")).toBe(true);
+  expect(LangForPath("x.css")).toBe("css");
+  expect(LangForPath("x.vue")).toBe("vue");
+});
+
+test("local repo provider learns from OUR own code as 'owned' (trained on despite license)", async () => {
+  const Root = mkdtempSync(join(tmpdir(), "shahd-repo-"));
+  try {
+    mkdirSync(join(Root, "src"), { recursive: true });
+    for (const N of ["Alpha", "Beta", "Gamma", "Delta", "Epsilon"]) writeFileSync(join(Root, "src", `${N}.ts`), Code(N));
+    writeFileSync(join(Root, "src", "styles.css"), "body { margin: 0; padding: 0; color: #333; background: #fff; }\n".repeat(12));
+    const Store = new InMemoryDocumentStore();
+    const Provider = CreateLocalRepoProvider({ Roots: [Root], License: "proprietary", MinLevel: "medium" });
+    const Stats = await IngestFromWeb([Provider], [""], Store, "2026-07-13T00:00:00.000Z");
+    expect(Stats.ByTier.Filtered).toBeGreaterThanOrEqual(5); // owned code is training-eligible despite "proprietary"
+    const Docs = await Store.All();
+    expect(Docs.every((D) => D.Origin === "owned")).toBe(true);
+    expect(Docs.some((D) => D.Lang === "css")).toBe(true); // css ingested (expanded languages)
+  } finally {
+    rmSync(Root, { recursive: true, force: true });
+  }
 });

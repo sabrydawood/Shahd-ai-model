@@ -18,6 +18,9 @@ export type RepoAssessment = {
   Level: RepoLevel;
 };
 
+/** Per-repo reporting hook payload (shared by the GitHub + local repo providers). */
+export type RepoIngestInfo = { Repo: string; License: string; Assessment: RepoAssessment; Ingested: boolean };
+
 const StructureDir = /(^|\/)(src|lib|source|app|packages|internal|pkg|core)\//i;
 
 export function AssessRepo(Files: RepoFile[]): RepoAssessment {

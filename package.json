@@ -19,6 +19,7 @@
     "foundry:migrate": "bun run Scripts/FoundryMigrate.ts",
     "foundry:smoke": "bun run Scripts/FoundrySmoke.ts",
     "foundry:ingest-web": "bun run Scripts/IngestWeb.ts",
+    "foundry:ingest-repos": "bun run Scripts/IngestOwnRepos.ts",
     "check:length": "bun run Tools/CheckFileLength.ts",
     "check:naming": "bun run Tools/CheckNamingConvention.ts",
     "ci": "bun run typecheck && bun run check:length && bun run check:naming && bun run lint && bun run gradcheck && bun test"
