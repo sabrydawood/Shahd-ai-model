@@ -24,24 +24,24 @@ export class ChatService {
     return this.Store.ListConversations();
   }
 
-  Messages(ConvId: string): ChatMessage[] {
+  Messages(ConvId: string): Promise<ChatMessage[]> {
     return this.Store.GetMessages(ConvId);
   }
 
-  Delete(ConvId: string): void {
-    this.Store.DeleteConversation(ConvId);
+  Delete(ConvId: string): Promise<void> {
+    return this.Store.DeleteConversation(ConvId);
   }
 
   /** Run a turn: persist the user message, stream the reply with full history as context, persist it. */
   async Turn(ConvId: string, Message: string, Opts: ChatOpts, OnDelta: (Delta: string) => void): Promise<string> {
     const At = this.Now();
-    this.Store.CreateConversation(ConvId, TitleFrom(Message), At);
-    const History = this.Store.GetMessages(ConvId); // prior turns (before this message)
-    this.Store.AddMessage(ConvId, "user", Message, At);
+    await this.Store.CreateConversation(ConvId, TitleFrom(Message), At);
+    const History = await this.Store.GetMessages(ConvId); // prior turns (before this message)
+    await this.Store.AddMessage(ConvId, "user", Message, At);
 
     const Context: ChatMessage[] = [...History, { Role: "user", Content: Message }];
     const Reply = await this.Stream(Context, Opts, OnDelta);
-    this.Store.AddMessage(ConvId, "assistant", Reply, this.Now());
+    await this.Store.AddMessage(ConvId, "assistant", Reply, this.Now());
     return Reply;
   }
 }

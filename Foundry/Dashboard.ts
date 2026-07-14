@@ -104,11 +104,11 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
       return Json({ provenance: Doc.Provenance, lang: Doc.Lang, tier: Doc.Tier, bytes: Doc.Bytes, license: Doc.License, origin: Doc.Origin, content: Doc.Content });
     }
 
-    if (Path === "/api/chat/conversations") return Json(Options.Chat?.ListConversations() ?? []);
-    if (Path === "/api/chat/conversation") return Json(Options.Chat?.Messages(Url.searchParams.get("id") ?? "") ?? []);
+    if (Path === "/api/chat/conversations") return Json(Options.Chat !== undefined ? await Options.Chat.ListConversations() : []);
+    if (Path === "/api/chat/conversation") return Json(Options.Chat !== undefined ? await Options.Chat.Messages(Url.searchParams.get("id") ?? "") : []);
     if (Path === "/api/chat/delete" && Req.method === "POST") {
       const Body = (await Req.json().catch(() => ({}))) as { id?: string };
-      if (Options.Chat !== undefined && typeof Body.id === "string") Options.Chat.Delete(Body.id);
+      if (Options.Chat !== undefined && typeof Body.id === "string") await Options.Chat.Delete(Body.id);
       return Json({ ok: true });
     }
 

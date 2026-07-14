@@ -6,7 +6,9 @@
 
 import { StartDashboard, IngestFromWeb, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent } from "../Foundry/FoundryBarrel.ts";
-import { ChatStore } from "../Foundry/ChatStore.ts";
+import type { ChatStore } from "../Foundry/ChatStore.ts";
+import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
+import { InMemoryChatStore } from "../Foundry/InMemoryChatStore.ts";
 import { ChatService } from "../Foundry/ChatService.ts";
 import type { ChatStreamFn } from "../Foundry/ChatService.ts";
 import { DescribeModel } from "../Foundry/ModelInfo.ts";
@@ -35,8 +37,10 @@ function LoadChat(): { Chat?: ChatService; Model: ModelInfo | null; Note: string
       const Rng = new SeededRng(Config.Training.Seed + Counter++);
       return GuardedGenerateStream(Model, Tokenizer, Prompt, Opts.MaxTokens, { ...DefaultSampling, Temperature: Opts.Temperature }, Rng, Config, OnDelta);
     };
-    const Chats = new ChatStore(process.env["CHAT_DB"] ?? "Chat.db");
-    return { Chat: new ChatService(Chats, Stream), Model: DescribeModel(Model), Note: `chat model: ${Path}` };
+    // Chat memory in Postgres (synced with the corpus, durable) when DATABASE_URL is set; else in-memory.
+    const DbUrl = process.env["DATABASE_URL"];
+    const Chats: ChatStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresChatStore(DbUrl) : new InMemoryChatStore();
+    return { Chat: new ChatService(Chats, Stream), Model: DescribeModel(Model), Note: `chat model: ${Path} (memory: ${DbUrl ? "postgres" : "in-memory"})` };
   } catch (Caught) {
     return { Model: null, Note: `chat disabled: ${(Caught as Error).message}` };
   }
