@@ -25,6 +25,7 @@ export type GitHubRepoOptions = {
   MaxContentBytesPerRepo?: number; // per-file size cap
   MinLevel?: RepoLevel; // skip repos below this level
   SkipRepo?: (Repo: string) => boolean; // skip already-learned repos (before download)
+  OnRepoStart?: (Repo: string) => void; // fired BEFORE a repo's tarball download (a "working" signal)
   OnRepo?: (Info: RepoIngestInfo) => void; // progress/reporting hook
   OnRepoReady?: RepoSink; // when set, each repo is streamed here (stored) right after download
 };
@@ -59,6 +60,7 @@ export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebPr
           Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: "already learned" });
           continue; // don't re-download a repo we already ingested
         }
+        Options.OnRepoStart?.(Repo.full_name); // signal work before the (slow) tarball download
         const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
         const Assessment = AssessRepo(Files);
         const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];

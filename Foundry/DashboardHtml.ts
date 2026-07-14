@@ -38,6 +38,8 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  .mgroup{margin:4px 0} .mgrow{display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px} .mgrow span{color:var(--mut)}
  .mbar{height:6px;background:#0d1117;border:1px solid var(--line);border-radius:4px;overflow:hidden} .mbfill{height:100%;background:var(--pur)}
  .pbar{height:9px;background:#0d1117;border:1px solid var(--line);border-radius:6px;overflow:hidden;margin:4px 0} .pfill{height:100%;width:0;transition:width .2s;background:var(--blue)} .pfill.rp{background:#2d68b0} .pfill.tr{background:var(--pur)}
+ @keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}} .pfill.busy{width:100%;animation:pulse 1.1s ease-in-out infinite;background:var(--yellow);transition:none}
+ .spin{display:inline-block;animation:spin 1s linear infinite} @keyframes spin{to{transform:rotate(360deg)}}
  .plabel{display:flex;justify-content:space-between;font-size:11px;color:var(--mut)}
  .log{margin-top:10px;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:9px;height:190px;overflow:auto;font:11.5px ui-monospace,monospace}
  .log div{padding:1px 0;white-space:pre-wrap} .log .t{color:var(--mut)} .ok{color:var(--green)} .skip{color:var(--yellow)} .err{color:var(--red)} .info-l{color:var(--pur)}
@@ -131,9 +133,10 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  // ── ① Collect ──
  var maxRepos=5,seen=0,ing=0,skp=0,files=0;
  function setCol(f,t){Q('cofill').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('colab').textContent=t;}
- function setCrepo(f,r,t){Q('crfill').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('crepo').textContent=r;Q('crlab').textContent=t;}
+ function setCrepo(f,r,t){Q('crfill').className='pfill rp';Q('crfill').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('crepo').textContent=r;Q('crlab').textContent=t;}
  function onLearn(e){var log=Q('clog');
   if(e.kind==='start'){if(e.repos)maxRepos=e.repos;seen=0;ing=0;skp=0;files=0;Q('cgo').disabled=true;badge('cbadge','collecting…','run');Q('clog').innerHTML='';logLine(log,'▶ collecting from '+e.source+' ('+(e.query||'own repos')+')');setCol(.02,'0 / '+maxRepos);setCrepo(0,'current repo','');}
+  else if(e.kind==='scanning'){Q('crepo').innerHTML='<span class="spin">⏳</span> '+H(e.label);Q('crlab').textContent='working…';Q('crfill').className='pfill rp busy';logLine(log,'⏳ '+e.label,'skip');}
   else if(e.kind==='repo'){seen++;if(e.ingested){ing++;files+=e.files;}else{skp++;}logLine(log,(e.ingested?'✓ ':'· ')+e.repo+' ['+e.level+', '+e.files+' files]'+(e.ingested?' INGESTED':' skipped'+(e.reason?' ('+e.reason+')':'')),e.ingested?'ok':'skip');setCol(seen/maxRepos,seen+' / '+maxRepos+' · '+ing+' new · '+skp+' skipped');}
   else if(e.kind==='repo-progress'){setCrepo(e.filesTotal?e.filesDone/e.filesTotal:0,'ingesting '+e.repo,e.filesDone+' / '+e.filesTotal+' files');}
   else if(e.kind==='done'){Q('cgo').disabled=false;badge('cbadge',e.ingested?'done':'0 new','ok');setCol(1,ing+' new · '+skp+' skipped · '+e.ingested+' files');setCrepo(1,'current repo','complete');logLine(log,'done — '+e.ingested+' files from '+ing+' repos ('+skp+' skipped)',e.ingested?'ok':'skip');if(e.ingested===0)logLine(log,'⚠ 0 new: all matching repos already collected. Try a different query or uncheck Skip.','skip');loadRepos();}

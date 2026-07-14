@@ -106,19 +106,23 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
   const IngestedAt = new Date().toISOString();
   let TotalIngested = 0;
   const OnRepoReady = async (Source: string, Files: SourceInput[]): Promise<void> => {
+    OnEvent({ kind: "scanning", label: "storing " + Source + " (" + Files.length + " files)…" });
     const Stride = Math.max(1, Math.floor(Files.length / 50)); // ~50 progress updates/repo
     const Stats = await IngestDocuments(Files, Store, IngestedAt, 256, (Done, Total) => {
       if (Done % Stride === 0 || Done === Total) OnEvent({ kind: "repo-progress", repo: Source, filesDone: Done, filesTotal: Total });
     });
     TotalIngested += Stats.Ingested;
   };
+  // Fired before each (slow) download so the UI shows "working" instead of a silent gap.
+  const OnRepoStart = (Repo: string): void => OnEvent({ kind: "scanning", label: "downloading " + Repo + "…" });
   const Providers: WebProvider[] = [];
   if (Settings.Source !== "local") {
-    Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo, OnRepoReady }));
+    Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));
   }
   if (Settings.Source !== "github") {
-    Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo, OnRepoReady }));
+    Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));
   }
+  OnEvent({ kind: "scanning", label: "searching for repos…" });
   for (const Provider of Providers) {
     try {
       await Provider.Fetch(Settings.Query, Settings.MaxRepos); // repos stream into OnRepoReady as they arrive

@@ -59,6 +59,7 @@ export type LocalRepoOptions = {
   MaxBytes?: number;
   MaxContentBytes?: number;
   SkipRepo?: (Repo: string) => boolean;
+  OnRepoStart?: (Repo: string) => void; // fired BEFORE walking a repo (a "working" signal)
   OnRepo?: (Info: RepoIngestInfo) => void;
   OnRepoReady?: RepoSink; // when set, each repo is streamed here (stored) right after it is walked
 };
@@ -79,6 +80,7 @@ export function CreateLocalRepoProvider(Options: LocalRepoOptions): WebProvider 
           Options.OnRepo?.({ Repo: Name, License, Assessment: EmptyAssessment, Ingested: false, Reason: "already learned" });
           continue;
         }
+        Options.OnRepoStart?.(Name); // signal work before walking (large repos take a moment)
         const Files = WalkRepo(Root, MaxFiles, MaxBytes, MaxContentBytes);
         const Assessment = AssessRepo(Files);
         const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];

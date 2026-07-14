@@ -78,9 +78,9 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
   };
 
   const Emit = (Event: LearnEvent): void => {
-    // Per-file repo-progress is transient and high-volume — broadcast it live but do NOT buffer it in
-    // the replay array (which is re-sent to every new/reconnecting client), so memory stays O(repos).
-    if (Event.kind !== "repo-progress") Job.Events.push(Event);
+    // repo-progress and scanning are transient status — broadcast live but do NOT buffer in the replay
+    // array (re-sent to every new/reconnecting client), so memory stays O(repos).
+    if (Event.kind !== "repo-progress" && Event.kind !== "scanning") Job.Events.push(Event);
     for (const Listener of Job.Listeners) Listener(Event);
     Publish({ type: "learn", event: Event });
     if (Event.kind === "done" || Event.kind === "error") Job.Running = false;
