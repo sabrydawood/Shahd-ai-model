@@ -53,3 +53,4 @@ Chat.db
 Chat.db-*
 *.db-shm
 *.db-wal
+App/tess.js
