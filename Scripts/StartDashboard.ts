@@ -67,10 +67,29 @@ async function LoadChat(): Promise<{ Chat?: ChatService; Model: ModelInfo | null
 
   const { Model, Tokenizer, Config } = Runnable;
   let Counter = 0;
-  const Stream: ChatStreamFn = (Messages, Opts, OnDelta) => {
+  // Log each inference to the server console so testing the model in the dashboard is observable.
+  const Stream: ChatStreamFn = async (Messages, Opts, OnDelta) => {
     const Prompt = RenderMessages(Messages.map((M) => ({ role: M.Role, content: M.Content })));
+    const LastMsg = (Messages[Messages.length - 1]?.Content ?? "").slice(0, 70).replace(/\s+/g, " ");
+    const PromptTokens = Tokenizer.Encode(Prompt).length;
+    const T0 = Date.now();
+    let Chars = 0;
+    let Chunks = 0;
+    console.log(`[chat] ▶ turns=${Messages.length} temp=${Opts.Temperature} maxTok=${Opts.MaxTokens} promptTok=${PromptTokens} · "${LastMsg}"`);
     const Rng = new SeededRng(Config.Training.Seed + Counter++);
-    return GuardedGenerateStream(Model, Tokenizer, Prompt, Opts.MaxTokens, { ...DefaultSampling, Temperature: Opts.Temperature }, Rng, Config, OnDelta, Opts.ShouldStop);
+    const Reply = await GuardedGenerateStream(
+      Model, Tokenizer, Prompt, Opts.MaxTokens, { ...DefaultSampling, Temperature: Opts.Temperature }, Rng, Config,
+      (Delta) => {
+        Chars += Delta.length;
+        Chunks++;
+        OnDelta(Delta);
+      },
+      Opts.ShouldStop,
+    );
+    const Ms = Date.now() - T0;
+    const Rate = Ms > 0 ? Math.round(Chars / (Ms / 1000)) : 0;
+    console.log(`[chat] ✓ ${Chars} chars / ${Chunks} tokens in ${Ms}ms (${Rate} ch/s) · reply "${Reply.slice(0, 70).replace(/\s+/g, " ")}"`);
+    return Reply;
   };
   // Chat memory in Postgres (synced, durable) when DATABASE_URL is set; else in-memory.
   const Chats: ChatStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresChatStore(DbUrl) : new InMemoryChatStore();
