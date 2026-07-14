@@ -7,11 +7,11 @@
 
 import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput } from "../Foundry/FoundryBarrel.ts";
-import type { ChatStore } from "../Foundry/ChatStore.ts";
+import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
 import { InMemoryChatStore } from "../Foundry/InMemoryChatStore.ts";
 import { ChatService } from "../Foundry/ChatService.ts";
-import type { ChatStreamFn } from "../Foundry/ChatService.ts";
+import type { ChatStreamFn, ChatOpts } from "../Foundry/ChatService.ts";
 import { DescribeModel } from "../Foundry/ModelInfo.ts";
 import type { ModelInfo } from "../Foundry/ModelInfo.ts";
 import { PostgresCheckpointStore } from "../Foundry/PostgresCheckpointStore.ts";
@@ -20,6 +20,13 @@ import { LoadRunnableModel, LoadRunnableModelFrom } from "../Brain/Checkpoint/Lo
 import type { RunnableModel } from "../Brain/Checkpoint/LoadRunnableModel.ts";
 import { GuardedGenerateStream } from "../Brain/Safety/GuardedGenerate.ts";
 import { RenderMessages } from "../Brain/Serving/RenderChat.ts";
+import { ChatSession } from "../Brain/Serving/ChatSession.ts";
+import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
+import type { AgentStep } from "../Brain/Serving/AgentLoop.ts";
+import { FormatTrace } from "../Brain/Serving/ReasoningTrace.ts";
+import { BuildAgentTooling, RenderToolManifest } from "../Brain/Serving/Tools/ToolsBarrel.ts";
+import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
+import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SeededRng } from "../Brain/Random/SeededRng.ts";
 import { ResolveStore, GitHubToken } from "./FoundryEnv.ts";
@@ -81,9 +88,43 @@ async function ListCheckpoints(): Promise<CheckpointSummary[]> {
 // Chat generation reads the CURRENT model from the holder, so a post-training reload takes effect
 // immediately. Logs each inference to the console so testing the model in the dashboard is observable.
 let Counter = 0;
+
+// Chat-format (SFT) models serve through the AGENT LOOP: the model can emit tool calls and thinking,
+// tools run against the config-gated registry, and the reasoning trace (thinking -> tool+result ->
+// answer) is logged to the console — the development lens. Dormant until a chat checkpoint is trained
+// (LoadRunnableModel sets Chat from the checkpoint's Meta.Format); base models keep the plain path.
+async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Opts: ChatOpts, OnDelta: (Delta: string) => void): Promise<string> {
+  const { Model, Tokenizer, Config } = Loaded;
+  const Tooling = BuildAgentTooling(Config);
+  const Session = new ChatSession("You are Shahd.\n\n" + RenderToolManifest(Tooling.Registry.List()));
+  for (const M of Messages) {
+    if (M.Role === "assistant") Session.AddAssistant(M.Content);
+    else Session.AddUser(M.Content);
+  }
+  Tooling.Context.Session = Session;
+  const Rng = new SeededRng(Config.Training.Seed + Counter++);
+  // One agent turn = the model continues the chat prompt up to <|endofturn|>, decoded to text.
+  const Gen = (Prompt: string): string => {
+    const Ids = Tokenizer.Encode(Prompt);
+    const Out = Generate(Model, Ids, Opts.MaxTokens, { ...DefaultSampling, Temperature: Opts.Temperature }, Rng);
+    const Text = Tokenizer.Decode(Out.slice(Ids.length));
+    const End = Text.indexOf(ChatTokens.EndOfTurn);
+    return End >= 0 ? Text.slice(0, End) : Text;
+  };
+  const Steps: AgentStep[] = [];
+  const Result = await RunAgent(Session, Gen, Tooling.Registry, Tooling.MaxSteps, Tooling.Context, (Step) => {
+    Steps.push(Step);
+    console.log(`[chat] step ${Step.Index}${Step.Call ? ` tool=${Step.Call.Name}` : ""}${Step.Terminal ? " (final)" : ""}`);
+  });
+  console.log(`[chat] reasoning trace:\n${FormatTrace(Steps)}`);
+  OnDelta(Result.FinalText);
+  return Result.FinalText;
+}
+
 const Stream: ChatStreamFn = async (Messages, Opts, OnDelta) => {
   const Loaded = ModelHolder.Runnable;
   if (Loaded === null) throw new Error("no trained model yet — collect data, then press Train Model");
+  if (Loaded.Chat) return ServeChatAgent(Loaded, Messages, Opts, OnDelta); // SFT/chat model -> agent + trace
   const { Model, Tokenizer, Config } = Loaded;
   const Prompt = RenderMessages(Messages.map((M) => ({ role: M.Role, content: M.Content })));
   const LastMsg = (Messages[Messages.length - 1]?.Content ?? "").slice(0, 70).replace(/\s+/g, " ");
