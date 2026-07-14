@@ -84,7 +84,14 @@ console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLa
 
 const StepStart = Date.now();
 const RunLogger = new Logger(null, true);
-TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger);
+// Lightweight per-step progress (~200 updates, no eval) so the dashboard bar moves continuously and
+// can show an ETA — the eval log only fires every EvalInterval and would otherwise leave long gaps.
+const ProgressStride = Math.max(1, Math.floor(EffectiveSteps / 200));
+TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, (Step, Loss, ElapsedMs) => {
+  if (Step % ProgressStride === 0 && Step % EvalInterval !== 0) {
+    console.log(JSON.stringify({ Step, TrainLoss: Math.round(Loss * 1e4) / 1e4, ElapsedMs }));
+  }
+});
 const PerStep = (Date.now() - StepStart) / EffectiveSteps;
 console.log(`per-step wall time: ${PerStep.toFixed(0)}ms -> ~${((PerStep * 2000) / 60000).toFixed(1)} min for 2000 steps`);
 

@@ -38,7 +38,7 @@ export type TrainSettings = {
 export type TrainEvent =
   | { kind: "train-start"; steps: number }
   | { kind: "train-info"; text: string } // corpus / bpe / model setup lines
-  | { kind: "train-progress"; step: number; steps: number; trainLoss: number; valLoss: number }
+  | { kind: "train-progress"; step: number; steps: number; trainLoss: number; valLoss?: number; elapsedMs?: number }
   | { kind: "train-done"; savedTo: string }
   | { kind: "train-error"; message: string };
 

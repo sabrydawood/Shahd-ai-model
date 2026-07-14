@@ -138,9 +138,16 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
 const ParseTrainLine = (Line: string, Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void): void => {
   if (Line.startsWith("{")) {
     try {
-      const J = JSON.parse(Line) as { Step?: number; TrainLoss?: number; ValLoss?: number };
+      const J = JSON.parse(Line) as { Step?: number; TrainLoss?: number; ValLoss?: number; ElapsedMs?: number };
       if (typeof J.Step === "number") {
-        OnEvent({ kind: "train-progress", step: J.Step, steps: Settings.Steps, trainLoss: J.TrainLoss ?? 0, valLoss: J.ValLoss ?? 0 });
+        OnEvent({
+          kind: "train-progress",
+          step: J.Step,
+          steps: Settings.Steps,
+          trainLoss: J.TrainLoss ?? 0,
+          valLoss: typeof J.ValLoss === "number" ? J.ValLoss : undefined,
+          elapsedMs: typeof J.ElapsedMs === "number" ? J.ElapsedMs : undefined,
+        });
         return;
       }
     } catch {

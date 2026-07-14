@@ -145,11 +145,20 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  function collect(){saveSettings();maxRepos=+Q('maxrepos').value||1;var s={Source:Q('source').value,Query:Q('query').value,Repos:Q('repos').value.split(',').map(function(x){return x.trim();}).filter(Boolean),MinLevel:Q('minlevel').value,MaxRepos:maxRepos,MaxFilesPerRepo:+Q('maxfiles').value,MaxBytesPerRepo:(+Q('maxmb').value)*1e6,MaxContentBytes:(+Q('maxkb').value)*1e3,SkipLearned:Q('skip').checked};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'learn',settings:s}));else logLine(Q('clog'),'not connected','err');}
 
  // ── ② Train ──
+ var fmtDur=function(ms){var s=Math.round(ms/1000);if(s<90)return s+'s';var m=Math.round(s/60);if(m<90)return m+'m';var h=m/60;if(h<48)return h.toFixed(1)+'h';return (h/24).toFixed(1)+'d';};
+ var lastVal='';
  function setTrain(f,step,loss){Q('tfill').style.width=Math.max(0,Math.min(1,f))*100+'%';if(step!==undefined)Q('tstep').textContent=step;if(loss!==undefined)Q('tloss').textContent=loss;}
  function onTrain(e){var log=Q('tlog');
-  if(e.kind==='train-start'){Q('tgo').disabled=true;badge('tbadge','training…','run tr');Q('tlog').innerHTML='';logLine(log,'▶ training '+e.steps+' steps on the collected corpus…','info-l');setTrain(.01,'step 0 / '+e.steps,'');}
+  if(e.kind==='train-start'){lastVal='';Q('tgo').disabled=true;badge('tbadge','training…','run tr');Q('tlog').innerHTML='';logLine(log,'▶ training '+e.steps+' steps on the collected corpus…','info-l');setTrain(.01,'step 0 / '+e.steps,'');}
   else if(e.kind==='train-info'){logLine(log,e.text,'info-l');}
-  else if(e.kind==='train-progress'){setTrain(e.steps?e.step/e.steps:0,'step '+e.step+' / '+e.steps,'loss '+e.trainLoss.toFixed(3)+' · val '+e.valLoss.toFixed(3));logLine(log,'step '+e.step+'/'+e.steps+'  loss '+e.trainLoss.toFixed(3)+'  val '+e.valLoss.toFixed(3));}
+  else if(e.kind==='train-progress'){
+   var frac=e.steps?e.step/e.steps:0;
+   if(typeof e.valLoss==='number')lastVal=' · val '+e.valLoss.toFixed(3);
+   var eta='';
+   if(e.elapsedMs&&e.step>0){eta=' · ~'+fmtDur(e.elapsedMs/e.step*(e.steps-e.step))+' left';}
+   setTrain(frac,'step '+e.step+' / '+e.steps,'loss '+e.trainLoss.toFixed(3)+lastVal+eta);
+   if(typeof e.valLoss==='number')logLine(log,'step '+e.step+'/'+e.steps+'  loss '+e.trainLoss.toFixed(3)+' val '+e.valLoss.toFixed(3)+(eta?'  ('+eta.replace(' · ~','~').replace(' left','')+' left)':''));
+  }
   else if(e.kind==='train-done'){Q('tgo').disabled=false;badge('tbadge','done','ok');setTrain(1,'complete',Q('tloss').textContent);logLine(log,'✓ trained + saved to '+e.savedTo+' — model reloaded into Chat','ok');}
   else if(e.kind==='train-error'){Q('tgo').disabled=false;badge('tbadge','error','err');logLine(log,'error: '+e.message,'err');}
  }

@@ -21,6 +21,7 @@ export function TrainLoop(
   ValLoader: DataLoader,
   Config: ResolvedConfig,
   RunLogger: Logger,
+  OnStep?: (Step: number, TrainLoss: number, ElapsedMs: number) => void, // lightweight per-step hook (no eval)
 ): void {
   const MaxSteps = Config.Schedule.MaxSteps;
   const StartMs = Date.now();
@@ -30,6 +31,7 @@ export function TrainLoop(
     const TrainLoss = AccumulateGradients(Model, Optimizer, TrainLoader, Config.Training.BatchSize);
     const GradNorm = ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
     Optimizer.Step(Lr);
+    OnStep?.(Step, TrainLoss, Date.now() - StartMs);
 
     const IsLast = Step === MaxSteps - 1;
     if (Step % Config.Training.EvalInterval === 0 || IsLast) {
