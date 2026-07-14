@@ -5,10 +5,27 @@
 
 import { StartDashboard, IngestFromWeb, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent } from "../Foundry/FoundryBarrel.ts";
+import type { ChatHandler } from "../Brain/Serving/InferenceServer.ts";
+import { CreateChatHandler } from "../Brain/Serving/InferenceServer.ts";
+import { LoadRunnableModel } from "../Brain/Checkpoint/LoadRunnableModel.ts";
 import { ResolveStore, GitHubToken } from "./FoundryEnv.ts";
 import { ReadArg } from "./ScriptArgs.ts";
+import { existsSync } from "node:fs";
 
 const { Store, Kind } = ResolveStore();
+
+// Best-effort: load a checkpoint so the /chat page works. If none exists (or loading fails), the
+// dashboard still serves and /api/chat returns a clear "no model loaded" message.
+function LoadChat(): { Chat: ChatHandler | undefined; Note: string } {
+  const Path = process.env["FOUNDRY_CHECKPOINT"] ?? ReadArg("--Checkpoint=", "Checkpoints/Corpus.ckpt");
+  if (!existsSync(Path)) return { Chat: undefined, Note: `no checkpoint at ${Path}` };
+  try {
+    const { Model, Tokenizer, Config } = LoadRunnableModel(Path);
+    return { Chat: CreateChatHandler(Model, Tokenizer, Config), Note: `chat model: ${Path}` };
+  } catch (Caught) {
+    return { Chat: undefined, Note: `chat disabled: ${(Caught as Error).message}` };
+  }
+}
 
 // The real provider-backed Learn runner injected into the dashboard.
 const Learn: LearnFn = async (Settings, OnEvent) => {
@@ -30,5 +47,7 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
 };
 
 const Port = Number(ReadArg("--Port=", "8090"));
-StartDashboard(Store, Port, Learn);
+const { Chat, Note } = LoadChat();
+StartDashboard(Store, Port, Learn, Chat);
 console.log(`Foundry control panel: http://localhost:${Port}  (store=${Kind}, ${await Store.Count()} docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
+console.log(`  ${Note}`);

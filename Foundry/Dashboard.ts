@@ -12,7 +12,10 @@
 import type { DocumentStore } from "./DocumentStore.ts";
 import type { LearnSettings, LearnEvent, LearnFn } from "./DashboardTypes.ts";
 import type { RepoLevel } from "./RepoQuality.ts";
+import type { ChatHandler } from "../Brain/Serving/InferenceServer.ts";
 import { DashboardHtml } from "./DashboardHtml.ts";
+import { ChatHtml } from "./ChatHtml.ts";
+import { GetSystemInfo } from "./SystemInfo.ts";
 
 export type DashboardHandler = (Req: Request) => Promise<Response>;
 
@@ -45,7 +48,7 @@ function Json(Data: unknown, Status = 200): Response {
   return Response.json(Data, { status: Status });
 }
 
-export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn): DashboardHandler {
+export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Chat?: ChatHandler): DashboardHandler {
   const Job: JobState = { Running: false, Events: [], Listeners: new Set() };
   const Emit = (Event: LearnEvent): void => {
     Job.Events.push(Event);
@@ -60,14 +63,28 @@ export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn): D
     if (Path === "/" || Path === "/index.html") {
       return new Response(DashboardHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
     }
+    if (Path === "/chat" || Path === "/chat.html") {
+      return new Response(ChatHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    }
+    if (Path === "/api/chat") {
+      if (Chat === undefined) return Json({ error: "no model loaded — train a checkpoint first (see Checkpoints/)" }, 501);
+      if (Req.method !== "POST") return Json({ error: "POST only" }, 405);
+      return Chat(Req);
+    }
     if (Path === "/api/stats") return Json(await Store.Stats());
     if (Path === "/api/repos") return Json(await Store.RepoSummaries());
+    if (Path === "/api/system") return Json(GetSystemInfo());
     if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, running: Job.Running });
     if (Path === "/api/documents") {
       const Source = Url.searchParams.get("source") ?? "";
       const Limit = ToNum(Url.searchParams.get("limit"), 500);
       const Docs = await Store.DocumentsBySource(Source, Limit);
-      return Json(Docs.map((D) => ({ path: D.Provenance.split("/").slice(-3).join("/"), tier: D.Tier, lang: D.Lang, bytes: D.Bytes, provenance: D.Provenance })));
+      return Json(Docs.map((D) => ({ id: D.Id, path: D.Provenance.split("/").slice(-3).join("/"), tier: D.Tier, lang: D.Lang, bytes: D.Bytes, provenance: D.Provenance })));
+    }
+    if (Path === "/api/file") {
+      const Doc = await Store.DocumentById(Url.searchParams.get("id") ?? "");
+      if (Doc === null) return Json({ error: "not found" }, 404);
+      return Json({ provenance: Doc.Provenance, lang: Doc.Lang, tier: Doc.Tier, bytes: Doc.Bytes, license: Doc.License, origin: Doc.Origin, content: Doc.Content });
     }
 
     if (Path === "/api/learn" && Req.method === "POST") {
@@ -131,8 +148,8 @@ export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn): D
   };
 }
 
-export function StartDashboard(Store: DocumentStore, Port = 8090, Learn?: LearnFn): ReturnType<typeof Bun.serve> {
+export function StartDashboard(Store: DocumentStore, Port = 8090, Learn?: LearnFn, Chat?: ChatHandler): ReturnType<typeof Bun.serve> {
   // idleTimeout 0 disables Bun's 10s request timeout, which would otherwise kill a long-lived SSE
   // stream mid-learn (a whole-repo ingest can take much longer than 10s).
-  return Bun.serve({ port: Port, idleTimeout: 0, fetch: CreateDashboardHandler(Store, Learn) });
+  return Bun.serve({ port: Port, idleTimeout: 0, fetch: CreateDashboardHandler(Store, Learn, Chat) });
 }

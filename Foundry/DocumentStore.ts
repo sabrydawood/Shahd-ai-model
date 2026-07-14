@@ -30,6 +30,8 @@ export interface DocumentStore {
   RepoSummaries(): Promise<RepoSummary[]>;
   /** Documents belonging to one repo/source (accordion contents). */
   DocumentsBySource(Source: string, Limit: number): Promise<DocumentRecord[]>;
+  /** One document's full record by id (content hash) — powers the file viewer. Null if absent. */
+  DocumentById(Id: string): Promise<DocumentRecord | null>;
   /** Aggregate dashboard stats (counts by tier/lang/license + filtered bytes), computed efficiently. */
   Stats(): Promise<FoundryStats>;
 }

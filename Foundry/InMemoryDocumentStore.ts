@@ -52,6 +52,10 @@ export class InMemoryDocumentStore implements DocumentStore {
     return [...this.Docs.values()].filter((D) => D.Source === Source).slice(0, Limit);
   }
 
+  async DocumentById(Id: string): Promise<DocumentRecord | null> {
+    return this.Docs.get(Id) ?? null;
+  }
+
   async Stats(): Promise<FoundryStats> {
     const ByTier: Record<Tier, number> = { Filtered: 0, Raw: 0, Rejected: 0 };
     const ByLang: Record<string, number> = {};

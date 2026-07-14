@@ -104,6 +104,11 @@ export class PostgresDocumentStore implements DocumentStore {
     return (await this.Db.select().from(Documents).where(eq(Documents.source, Source)).limit(Limit)).map(FromRow);
   }
 
+  async DocumentById(Id: string): Promise<DocumentRecord | null> {
+    const Rows = await this.Db.select().from(Documents).where(eq(Documents.id, Id)).limit(1);
+    return Rows[0] ? FromRow(Rows[0]) : null;
+  }
+
   async Stats(): Promise<FoundryStats> {
     const CountExpr = sql<number>`count(*)::int`;
     const Tiers = await this.Db.select({ Key: Documents.tier, Count: CountExpr }).from(Documents).groupBy(Documents.tier);
