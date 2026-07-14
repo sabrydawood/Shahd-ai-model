@@ -16,23 +16,23 @@ Three things are always separate — never one file:
 ## 1. The in-repo model family
 
 Parameter counts verified by building each config: `params ≈ (Vocab × Embed) + 16 × Layers × Embed²`.
-Head dimension is 64 (standard) except the two smallest tiers.
+Head dimension is 64 (standard) except the two smallest tiers. **Steps** is the minimum to reach the
+Chinchilla ~20-tokens/param floor at the dashboard's default batch (16) and each tier's context —
+a lower bound; real training uses several times more (`steps = tokens ÷ (batch × context)`).
 
-| Tier | Embed | Layers | Heads | Context | Vocab | Params | Trains on | Comparable to |
-|------|-------|--------|-------|---------|-------|--------|-----------|---------------|
-| Seed | 96 | 3 | 4 | 96 | 512 | 0.49M | CPU (minutes) | toy |
-| Nano | 128 | 4 | 4 | 256 | 512 | 1.1M | CPU (minutes) | experiment |
-| Micro | 256 | 6 | 4 | 512 | 1,024 | 6.6M | CPU (~1 hr) | tiny |
-| Mini | 512 | 8 | 8 | 1,024 | 4,096 | 36M | small GPU | GPT-2 nano |
-| Small | 768 | 12 | 12 | 2,048 | 16,384 | 126M | 8–12 GB GPU | ≈ GPT-2 small (124M) |
-| Base | 1,024 | 24 | 16 | 4,096 | 32,000 | 435M | 16–24 GB GPU | ≈ GPT-2 medium/large |
-| Large | 2,048 | 32 | 32 | 8,192 | 50,000 | 2.25B | 40–80 GB GPU | ≈ a small modern LLM |
+| Tier | Embed | Layers | Heads | Context | Vocab | Params | Steps (min) | Trains on | Comparable to |
+|------|-------|--------|-------|---------|-------|--------|-------------|-----------|---------------|
+| Seed | 96 | 3 | 4 | 96 | 512 | 0.49M | ~6,000 | CPU (minutes) | toy |
+| Nano | 128 | 4 | 4 | 256 | 512 | 1.1M | ~5,000 | CPU (minutes) | experiment |
+| Micro | 256 | 6 | 4 | 512 | 1,024 | 6.6M | ~16,000 | CPU (~1 hr) | tiny |
+| Mini | 512 | 8 | 8 | 1,024 | 4,096 | 36M | ~44,000 | small GPU | GPT-2 nano |
+| Small | 768 | 12 | 12 | 2,048 | 16,384 | 126M | ~77,000 | 8–12 GB GPU | ≈ GPT-2 small (124M) |
+| Base | 1,024 | 24 | 16 | 4,096 | 32,000 | 435M | ~130,000 | 16–24 GB GPU | ≈ GPT-2 medium/large |
+| Large | 2,048 | 32 | 32 | 8,192 | 50,000 | 2.25B | ~340,000 | 40–80 GB GPU | ≈ a small modern LLM |
 
 Training memory ≈ 4× the weights (weights + gradients + optimizer m/v), plus activations. The current
 compute path is Float64 (8 bytes), which **doubles** memory; large tiers require switching to Float32 /
-mixed precision (`Compute.Precision: "F32"`) and a GPU backend.
-
-### How many steps? (steps vs tokens)
+mixed precision (`Compute.Precision: "F32"`) an### How many steps? (steps vs tokens)
 
 `Steps` (the dashboard knob) is **not** a fixed property of a model size — it depends on batch and
 context. The real measure of "how much training" is **tokens seen**:
@@ -59,6 +59,8 @@ batch (16) and each tier's context — treat these as a lower bound, not a targe
 The step counts explode because token budget grows with parameters while a small CPU batch stays
 tiny — this is exactly why the larger tiers need a GPU (big batches cut the step count, and each step
 runs far faster). On CPU, only Seed/Nano reach a useful step count in reasonable time.
+
+d a GPU backend.
 
 ---
 
@@ -106,8 +108,7 @@ Example for a 7B-class model (32 layers, hidden 4096, FP16). With standard multi
 | 128k | 64 GB | 16 GB | 8 GB |
 | 256k | 128 GB | 32 GB | 16 GB |
 | 1M | 512 GB | 128 GB | 64 GB |
-
-This is why long-context models rely on **GQA** (fewer KV heads), **KV-cache quantization**, **paged
+antization**,**paged
 attention**, and **sliding-window / sparse attention** — otherwise a single 1M-token request would need
 more memory than the model weights themselves.
 
