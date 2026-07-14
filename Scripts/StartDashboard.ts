@@ -94,7 +94,7 @@ const Chats: ChatStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresChatS
 const Chat = new ChatService(Chats, Stream);
 
 // STAGE 1 — Collect data (the provider-backed Learn runner).
-const Learn: LearnFn = async (Settings, OnEvent) => {
+const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   const Learned = new Set(Settings.SkipLearned ? await Store.Sources() : []);
   const Skip = (Repo: string): boolean => Learned.has(Repo);
   const OnRepo = (Info: RepoIngestInfo): void => {
@@ -113,8 +113,12 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
     });
     TotalIngested += Stats.Ingested;
   };
-  // Fired before each (slow) download so the UI shows "working" instead of a silent gap.
-  const OnRepoStart = (Repo: string): void => OnEvent({ kind: "scanning", label: "downloading " + Repo + "…" });
+  // Fired before each (slow) download: show a "working" status, and stop cleanly at this boundary if
+  // the user pressed Stop — already-stored repos stay (collect is incremental), so nothing is lost.
+  const OnRepoStart = (Repo: string): void => {
+    if (Signal?.aborted === true) throw new Error("stopped by user");
+    OnEvent({ kind: "scanning", label: "downloading " + Repo + "…" });
+  };
   const Providers: WebProvider[] = [];
   if (Settings.Source !== "local") {
     Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));
@@ -157,11 +161,19 @@ const ParseTrainLine = (Line: string, Settings: TrainSettings, OnEvent: (Event: 
   OnEvent({ kind: "train-info", text: Line });
 };
 
-const Train: TrainFn = async (Settings, OnEvent) => {
+const Train: TrainFn = async (Settings, OnEvent, Signal) => {
   const Proc = Bun.spawn(
-    ["bun", "run", "Scripts/TrainOnFoundry.ts", `--Steps=${Settings.Steps}`, `--CorpusMb=${Settings.CorpusMb}`, `--EmbedDim=${Settings.EmbedDim}`, `--Layers=${Settings.NumLayers}`, `--Name=${CkptName}`, "--Save=Checkpoints/Foundry.ckpt"],
+    ["bun", "run", "Scripts/TrainOnFoundry.ts", `--Steps=${Settings.Steps}`, `--CorpusMb=${Settings.CorpusMb}`, `--EmbedDim=${Settings.EmbedDim}`, `--Layers=${Settings.NumLayers}`, `--Name=${CkptName}`],
     { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
   );
+  const OnAbort = (): void => {
+    try {
+      Proc.kill();
+    } catch {
+      // already exited
+    }
+  };
+  Signal?.addEventListener("abort", OnAbort);
   const Decoder = new TextDecoder();
   let Buf = "";
   const Reader = Proc.stdout.getReader();
@@ -180,7 +192,9 @@ const Train: TrainFn = async (Settings, OnEvent) => {
     }
   }
   const Code = await Proc.exited;
-  if (Code === 0) OnEvent({ kind: "train-done", savedTo: `postgres:${CkptName}` });
+  Signal?.removeEventListener("abort", OnAbort);
+  if (Signal?.aborted === true) OnEvent({ kind: "train-error", message: "stopped by user — last saved checkpoint is kept; press Train to resume" });
+  else if (Code === 0) OnEvent({ kind: "train-done", savedTo: `postgres:${CkptName}` });
   else OnEvent({ kind: "train-error", message: `trainer exited with code ${Code} (see server console)` });
 };
 

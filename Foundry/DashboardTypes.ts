@@ -24,7 +24,7 @@ export type LearnEvent =
   | { kind: "done"; ingested: number }
   | { kind: "error"; message: string };
 
-export type LearnFn = (Settings: LearnSettings, OnEvent: (Event: LearnEvent) => void) => Promise<void>;
+export type LearnFn = (Settings: LearnSettings, OnEvent: (Event: LearnEvent) => void, Signal?: AbortSignal) => Promise<void>;
 
 // Model TRAINING (distinct from Learn/data-collection): turn the collected Postgres corpus into a
 // trained model checkpoint. Runs as a subprocess so it never blocks the dashboard event loop.
@@ -42,4 +42,4 @@ export type TrainEvent =
   | { kind: "train-done"; savedTo: string }
   | { kind: "train-error"; message: string };
 
-export type TrainFn = (Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void) => Promise<void>;
+export type TrainFn = (Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void, Signal?: AbortSignal) => Promise<void>;

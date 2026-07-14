@@ -29,7 +29,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  .row{display:flex;gap:8px} .row>div{flex:1}
  .chk{display:flex;align-items:center;gap:8px;margin-top:11px} .chk input{width:auto}
  button{margin-top:13px;width:100%;color:#fff;border:0;border-radius:7px;padding:10px;font:600 14px system-ui;cursor:pointer}
- button.collect{background:var(--blue)} button.train{background:var(--pur)}
+ button.collect{background:var(--blue)} button.train{background:var(--pur)} button.stop{background:var(--red)}
  button:disabled{opacity:.5;cursor:not-allowed}
  .hint{font-size:11px;color:var(--mut);margin-top:8px;line-height:1.5}
  .srow{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px solid var(--line);font-size:12px} .srow:first-child{border-top:0} .srow span{color:var(--mut)} .srow b{font-weight:600;text-align:right;word-break:break-word}
@@ -75,7 +75,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
    <div class="row"><div><label>Min level</label><select id="minlevel"><option>medium</option><option>high</option><option>low</option></select></div><div><label>Max repos</label><input id="maxrepos" type="number" value="5"></div></div>
    <div class="row"><div><label>Max files/repo</label><input id="maxfiles" type="number" value="2000"></div><div><label>Max MB/repo</label><input id="maxmb" type="number" value="32"></div><div><label>Max KB/file</label><input id="maxkb" type="number" value="512"></div></div>
    <div class="chk"><input type="checkbox" id="skip" checked><label style="margin:0">Skip repos already collected</label></div>
-   <button class="collect" id="cgo" onclick="collect()">▶ Collect Data</button>
+   <button class="collect" id="cgo" onclick="cbtn()">▶ Collect Data</button>
    <div class="plabel" style="margin-top:11px"><span>Overall</span><span id="colab">idle</span></div>
    <div class="pbar"><div class="pfill" id="cofill"></div></div>
    <div class="plabel"><span id="crepo">current repo</span><span id="crlab"></span></div>
@@ -86,7 +86,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
    <h2>② Train Model <span class="badge" id="tbadge">idle</span></h2>
    <div class="row"><div><label>Steps</label><input id="tsteps" type="number" value="500"></div><div><label>Corpus MB</label><input id="tcorpus" type="number" step="0.5" value="1.5"></div></div>
    <div class="row"><div><label>Embed dim</label><input id="tembed" type="number" value="96"></div><div><label>Layers</label><input id="tlayers" type="number" value="3"></div></div>
-   <button class="train" id="tgo" onclick="train()">▶ Train Model</button>
+   <button class="train" id="tgo" onclick="tbtn()">▶ Train Model</button>
    <div class="hint">Trains a byte-level model on the collected corpus, then loads it into Chat. Bigger dim/layers/steps = better but slower (CPU).</div>
    <div class="plabel" style="margin-top:11px"><span id="tstep">step</span><span id="tloss"></span></div>
    <div class="pbar"><div class="pfill tr" id="tfill"></div></div>
@@ -130,17 +130,23 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
   Q('langs').innerHTML='<b>langs</b> '+kv(s.ByLang);
  }
 
+ // ── Start/Stop buttons ──
+ var collecting=false,training=false;
+ function setBtn(id,mode){var b=Q(id);var base=id==='cgo'?'collect':'train';var idle=id==='cgo'?'▶ Collect Data':'▶ Train Model';if(mode==='run'){b.disabled=false;b.textContent='■ Stop';b.className=base+' stop';}else if(mode==='stopping'){b.disabled=true;b.textContent='stopping…';}else{b.disabled=false;b.textContent=idle;b.className=base;}}
+ function cbtn(){if(collecting){if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'learn-stop'}));setBtn('cgo','stopping');}else collect();}
+ function tbtn(){if(training){if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'train-stop'}));setBtn('tgo','stopping');}else train();}
+
  // ── ① Collect ──
  var maxRepos=5,seen=0,ing=0,skp=0,files=0;
  function setCol(f,t){Q('cofill').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('colab').textContent=t;}
  function setCrepo(f,r,t){Q('crfill').className='pfill rp';Q('crfill').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('crepo').textContent=r;Q('crlab').textContent=t;}
  function onLearn(e){var log=Q('clog');
-  if(e.kind==='start'){if(e.repos)maxRepos=e.repos;seen=0;ing=0;skp=0;files=0;Q('cgo').disabled=true;badge('cbadge','collecting…','run');Q('clog').innerHTML='';logLine(log,'▶ collecting from '+e.source+' ('+(e.query||'own repos')+')');setCol(.02,'0 / '+maxRepos);setCrepo(0,'current repo','');}
+  if(e.kind==='start'){if(e.repos)maxRepos=e.repos;seen=0;ing=0;skp=0;files=0;collecting=true;setBtn('cgo','run');badge('cbadge','collecting…','run');Q('clog').innerHTML='';logLine(log,'▶ collecting from '+e.source+' ('+(e.query||'own repos')+')');setCol(.02,'0 / '+maxRepos);setCrepo(0,'current repo','');}
   else if(e.kind==='scanning'){Q('crepo').innerHTML='<span class="spin">⏳</span> '+H(e.label);Q('crlab').textContent='working…';Q('crfill').className='pfill rp busy';logLine(log,'⏳ '+e.label,'skip');}
   else if(e.kind==='repo'){seen++;if(e.ingested){ing++;files+=e.files;}else{skp++;}logLine(log,(e.ingested?'✓ ':'· ')+e.repo+' ['+e.level+', '+e.files+' files]'+(e.ingested?' INGESTED':' skipped'+(e.reason?' ('+e.reason+')':'')),e.ingested?'ok':'skip');setCol(seen/maxRepos,seen+' / '+maxRepos+' · '+ing+' new · '+skp+' skipped');}
   else if(e.kind==='repo-progress'){setCrepo(e.filesTotal?e.filesDone/e.filesTotal:0,'ingesting '+e.repo,e.filesDone+' / '+e.filesTotal+' files');}
-  else if(e.kind==='done'){Q('cgo').disabled=false;badge('cbadge',e.ingested?'done':'0 new','ok');setCol(1,ing+' new · '+skp+' skipped · '+e.ingested+' files');setCrepo(1,'current repo','complete');logLine(log,'done — '+e.ingested+' files from '+ing+' repos ('+skp+' skipped)',e.ingested?'ok':'skip');if(e.ingested===0)logLine(log,'⚠ 0 new: all matching repos already collected. Try a different query or uncheck Skip.','skip');loadRepos();}
-  else if(e.kind==='error'){Q('cgo').disabled=false;badge('cbadge','error','err');logLine(log,'error: '+e.message,'err');}
+  else if(e.kind==='done'){collecting=false;setBtn('cgo','idle');badge('cbadge',e.ingested?'done':'0 new','ok');setCol(1,ing+' new · '+skp+' skipped · '+e.ingested+' files');setCrepo(1,'current repo','complete');logLine(log,'done — '+e.ingested+' files from '+ing+' repos ('+skp+' skipped)',e.ingested?'ok':'skip');if(e.ingested===0)logLine(log,'⚠ 0 new: all matching repos already collected. Try a different query or uncheck Skip.','skip');loadRepos();}
+  else if(e.kind==='error'){collecting=false;setBtn('cgo','idle');badge('cbadge','error','err');logLine(log,'error: '+e.message,'err');}
  }
  function collect(){saveSettings();maxRepos=+Q('maxrepos').value||1;var s={Source:Q('source').value,Query:Q('query').value,Repos:Q('repos').value.split(',').map(function(x){return x.trim();}).filter(Boolean),MinLevel:Q('minlevel').value,MaxRepos:maxRepos,MaxFilesPerRepo:+Q('maxfiles').value,MaxBytesPerRepo:(+Q('maxmb').value)*1e6,MaxContentBytes:(+Q('maxkb').value)*1e3,SkipLearned:Q('skip').checked};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'learn',settings:s}));else logLine(Q('clog'),'not connected','err');}
 
@@ -149,7 +155,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  var lastVal='';
  function setTrain(f,step,loss){Q('tfill').style.width=Math.max(0,Math.min(1,f))*100+'%';if(step!==undefined)Q('tstep').textContent=step;if(loss!==undefined)Q('tloss').textContent=loss;}
  function onTrain(e){var log=Q('tlog');
-  if(e.kind==='train-start'){lastVal='';Q('tgo').disabled=true;badge('tbadge','training…','run tr');Q('tlog').innerHTML='';logLine(log,'▶ training '+e.steps+' steps on the collected corpus…','info-l');setTrain(.01,'step 0 / '+e.steps,'');}
+  if(e.kind==='train-start'){lastVal='';training=true;setBtn('tgo','run');badge('tbadge','training…','run tr');Q('tlog').innerHTML='';logLine(log,'▶ training '+e.steps+' steps on the collected corpus…','info-l');setTrain(.01,'step 0 / '+e.steps,'');}
   else if(e.kind==='train-info'){logLine(log,e.text,'info-l');}
   else if(e.kind==='train-progress'){
    var frac=e.steps?e.step/e.steps:0;
@@ -159,8 +165,8 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
    setTrain(frac,'step '+e.step+' / '+e.steps,'loss '+e.trainLoss.toFixed(3)+lastVal+eta);
    if(typeof e.valLoss==='number')logLine(log,'step '+e.step+'/'+e.steps+'  loss '+e.trainLoss.toFixed(3)+' val '+e.valLoss.toFixed(3)+(eta?'  ('+eta.replace(' · ~','~').replace(' left','')+' left)':''));
   }
-  else if(e.kind==='train-done'){Q('tgo').disabled=false;badge('tbadge','done','ok');setTrain(1,'complete',Q('tloss').textContent);logLine(log,'✓ trained + saved to '+e.savedTo+' — model reloaded into Chat','ok');}
-  else if(e.kind==='train-error'){Q('tgo').disabled=false;badge('tbadge','error','err');logLine(log,'error: '+e.message,'err');}
+  else if(e.kind==='train-done'){training=false;setBtn('tgo','idle');badge('tbadge','done','ok');setTrain(1,'complete',Q('tloss').textContent);logLine(log,'✓ trained + saved to '+e.savedTo+' — model reloaded into Chat','ok');}
+  else if(e.kind==='train-error'){training=false;setBtn('tgo','idle');var stopped=e.message.indexOf('stop')>=0;badge('tbadge',stopped?'stopped':'error',stopped?'skip':'err');logLine(log,(stopped?'■ ':'error: ')+e.message,stopped?'skip':'err');}
  }
  function train(){saveSettings();var s={Steps:+Q('tsteps').value,CorpusMb:+Q('tcorpus').value,EmbedDim:+Q('tembed').value,NumLayers:+Q('tlayers').value};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'train',settings:s}));else logLine(Q('tlog'),'not connected','err');}
 

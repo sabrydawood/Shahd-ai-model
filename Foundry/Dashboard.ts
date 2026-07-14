@@ -40,7 +40,7 @@ function ParseTrainSettings(Body: Record<string, unknown>): TrainSettings {
 type WsData = Record<string, never>;
 type Ws = ServerWebSocket<WsData>;
 
-type JobState = { Running: boolean; Events: LearnEvent[]; Listeners: Set<(Event: LearnEvent) => void> };
+type JobState = { Running: boolean; Events: LearnEvent[]; Listeners: Set<(Event: LearnEvent) => void>; Controller: AbortController | null };
 
 function ToNum(Value: unknown, Default: number): number {
   if (Value === null || Value === undefined || Value === "") return Default; // Number(null) is 0, not the default
@@ -71,7 +71,7 @@ function Json(Data: unknown, Status = 200): Response {
 
 // Everything the panel needs, built once and shared by the HTTP handler and the WebSocket handler.
 export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Options: DashboardOptions = {}) {
-  const Job: JobState = { Running: false, Events: [], Listeners: new Set() };
+  const Job: JobState = { Running: false, Events: [], Listeners: new Set(), Controller: null };
   let Bound: Server<WsData> | null = null;
   const Publish = (Message: unknown): void => {
     Bound?.publish("all", JSON.stringify(Message));
@@ -90,14 +90,16 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     if (Learn === undefined || Job.Running) return false;
     Job.Running = true;
     Job.Events = [];
+    Job.Controller = new AbortController();
     Emit({ kind: "start", query: Settings.Query, source: Settings.Source, repos: Settings.MaxRepos });
-    void Learn(Settings, Emit).catch((Caught) => Emit({ kind: "error", message: (Caught as Error).message }));
+    void Learn(Settings, Emit, Job.Controller.signal).catch((Caught) => Emit({ kind: "error", message: (Caught as Error).message }));
     return true;
   };
+  const StopLearn = (): void => Job.Controller?.abort();
 
   // Model TRAINING — a separate pipeline stage from Learn/data-collection. On completion the freshly
   // trained checkpoint is reloaded into the live chat model, and the new model panel is broadcast.
-  const TrainJob: { Running: boolean; Events: TrainEvent[] } = { Running: false, Events: [] };
+  const TrainJob: { Running: boolean; Events: TrainEvent[]; Controller: AbortController | null } = { Running: false, Events: [], Controller: null };
   const TrainEmit = (Event: TrainEvent): void => {
     TrainJob.Events.push(Event); // sparse (one per eval interval) — buffer so reconnects see progress
     Publish({ type: "train", event: Event });
@@ -115,10 +117,12 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     if (Options.Train === undefined || TrainJob.Running) return false;
     TrainJob.Running = true;
     TrainJob.Events = [];
+    TrainJob.Controller = new AbortController();
     TrainEmit({ kind: "train-start", steps: Settings.Steps });
-    void Options.Train(Settings, TrainEmit).catch((Caught) => TrainEmit({ kind: "train-error", message: (Caught as Error).message }));
+    void Options.Train(Settings, TrainEmit, TrainJob.Controller.signal).catch((Caught) => TrainEmit({ kind: "train-error", message: (Caught as Error).message }));
     return true;
   };
+  const StopTrain = (): void => TrainJob.Controller?.abort();
 
   const Fetch = async (Req: Request): Promise<Response> => {
     const Url = new URL(Req.url);
@@ -257,10 +261,14 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
         if (!StartLearn(ParseSettings(Msg.settings ?? {}))) {
           Socket.send(JSON.stringify({ type: "learn", event: { kind: "error", message: Learn === undefined ? "no learn runner wired" : "a run is already in progress" } }));
         }
+      } else if (Msg.type === "learn-stop") {
+        StopLearn();
       } else if (Msg.type === "train") {
         if (!StartTrain(ParseTrainSettings(Msg.settings ?? {}))) {
           Socket.send(JSON.stringify({ type: "train", event: { kind: "train-error", message: Options.Train === undefined ? "training not available" : "a training run is already in progress" } }));
         }
+      } else if (Msg.type === "train-stop") {
+        StopTrain();
       } else if (Msg.type === "chat") {
         void HandleChat(Socket, Msg as { convId?: string; message?: string; temperature?: number; maxTokens?: number });
       }

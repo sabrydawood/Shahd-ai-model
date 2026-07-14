@@ -20,6 +20,8 @@ import { Logger } from "../Brain/Logging/Logger.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { BuildCheckpoint, WriteCheckpointObject } from "../Brain/Checkpoint/CheckpointWriter.ts";
+import { ApplyCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
+import type { Checkpoint } from "../Brain/Checkpoint/CheckpointFormat.ts";
 import { PostgresCheckpointStore } from "../Foundry/PostgresCheckpointStore.ts";
 import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
 import { ResolveStore } from "./FoundryEnv.ts";
@@ -50,16 +52,36 @@ for (const Doc of Filtered) {
 const CorpusText = Parts.join("\n\n");
 console.log(`corpus: ${Parts.length}/${Filtered.length} Filtered docs, ${(CorpusText.length / 1e6).toFixed(2)}MB (store=${Kind})`);
 
-// Train byte-level BPE merges on the corpus, then encode it.
+const EffectiveSteps = Measure ? 8 : Steps;
+const CkptName = ReadArg("--Name=", "foundry");
+const DbUrl = process.env["DATABASE_URL"];
+const CkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckpointStore(DbUrl) : null;
+const Fresh = ReadFlag("--Fresh");
+
+// RESUME: if a checkpoint of the same name + matching architecture exists (e.g. a stopped or crashed
+// run), continue from where it left off — reuse its tokenizer, weights, optimizer, and RNG. Otherwise
+// start fresh. This is what makes a long run crash-safe together with the periodic saves below.
+type BpeTokenizerState = { Kind: string; Merges: [number, number][] };
+let Resume: { Ckpt: Checkpoint; Step: number; Merges: [number, number][] } | null = null;
+if (CkptStore !== null && !Measure && !Fresh) {
+  const Existing = await CkptStore.Load(CkptName);
+  const State = (Existing?.TokenizerState ?? null) as BpeTokenizerState | null;
+  if (Existing !== null && State !== null && State.Kind === "Bpe" && Array.isArray(State.Merges)) {
+    const M = Existing.Config.Model;
+    const Match = M.EmbedDim === EmbedDim && M.NumLayers === NumLayers && M.BlockSize === BlockSize && Existing.Config.Schedule.MaxSteps === EffectiveSteps;
+    const DoneStep = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
+    if (Match && DoneStep < EffectiveSteps) Resume = { Ckpt: Existing, Step: DoneStep, Merges: State.Merges };
+  }
+}
+
+// Tokenizer: reuse the checkpoint's merges when resuming, else train fresh BPE on the corpus.
 const T0 = Date.now();
-const Bpe = TrainBpe(CorpusText, NumMerges);
+const Bpe = Resume !== null ? { Merges: Resume.Merges } : TrainBpe(CorpusText, NumMerges);
 const Tokenizer = new BytePairEncoder(Bpe);
 const Encoded = Tokenizer.Encode(CorpusText);
-console.log(`bpe: ${Bpe.Merges.length} merges -> vocab ${Tokenizer.VocabSize}; ${Encoded.length} tokens; trained in ${((Date.now() - T0) / 1000).toFixed(1)}s`);
+console.log(`bpe: ${Bpe.Merges.length} merges -> vocab ${Tokenizer.VocabSize}; ${Encoded.length} tokens${Resume !== null ? " (reused from checkpoint)" : `; trained in ${((Date.now() - T0) / 1000).toFixed(1)}s`}`);
 
-const EffectiveSteps = Measure ? 8 : Steps;
 const WarmupSteps = Math.max(1, Math.min(40, Math.floor(EffectiveSteps / 4)));
-// In measure mode, push eval past the last step so we time pure train steps (no eval passes).
 const EvalInterval = Measure ? EffectiveSteps + 1 : Math.max(1, Math.min(100, EffectiveSteps));
 const Config = LoadConfig({
   Overrides: {
@@ -79,40 +101,50 @@ const TrainLoader = new InMemoryDataLoader(Train, Config.Model.BlockSize, Rng.Da
 const ValLoader = new InMemoryDataLoader(Val, Config.Model.BlockSize, Rng.DataRng);
 const Model = new Shahd(Config, Rng.InitRng);
 const Optimizer = CreateOptimizer(Model.Parameters(), Config);
+let StartStep = 0;
+if (Resume !== null) {
+  ApplyCheckpoint(Resume.Ckpt, Model, Optimizer, Rng); // restore weights + optimizer + RNG state
+  StartStep = Resume.Step;
+}
 const Params = Model.Parameters().reduce((A, P) => A + P.Size, 0);
-console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}; ${EffectiveSteps} steps`);
+console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${EffectiveSteps} steps`);
 
-const StepStart = Date.now();
+const GlobalStart = Date.now();
 const RunLogger = new Logger(null, true);
-// Lightweight per-step progress (~200 updates, no eval) so the dashboard bar moves continuously and
-// can show an ETA — the eval log only fires every EvalInterval and would otherwise leave long gaps.
 const ProgressStride = Math.max(1, Math.floor(EffectiveSteps / 200));
-TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, (Step, Loss, ElapsedMs) => {
-  if (Step % ProgressStride === 0 && Step % EvalInterval !== 0) {
-    console.log(JSON.stringify({ Step, TrainLoss: Math.round(Loss * 1e4) / 1e4, ElapsedMs }));
-  }
-});
-const PerStep = (Date.now() - StepStart) / EffectiveSteps;
-console.log(`per-step wall time: ${PerStep.toFixed(0)}ms -> ~${((PerStep * 2000) / 60000).toFixed(1)} min for 2000 steps`);
+const OnStep = (Step: number, Loss: number): void => {
+  if (Step % ProgressStride === 0 && Step % EvalInterval !== 0) console.log(JSON.stringify({ Step, TrainLoss: Math.round(Loss * 1e4) / 1e4, ElapsedMs: Date.now() - GlobalStart }));
+};
 
 if (Measure) {
-  console.log("measure-only: not saving. Pick --Steps from the estimate above.");
+  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep);
+  const PerStep = (Date.now() - GlobalStart) / EffectiveSteps;
+  console.log(`per-step wall time: ${PerStep.toFixed(0)}ms -> ~${((PerStep * 2000) / 60000).toFixed(1)} min for 2000 steps`);
+  console.log("measure-only: not saving.");
   process.exit(0);
 }
 
-// Persist the model to Postgres (the single store) when DATABASE_URL is set — no file, so the corpus,
-// chat memory, AND model weights all live in one place. Only when there is NO database do we fall back
-// to a checkpoint file.
-const Ckpt = BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: Config.Schedule.MaxSteps, Corpus: "foundry-filtered" }, { Kind: "Bpe", Merges: Bpe.Merges });
-const CkptName = ReadArg("--Name=", "foundry");
-const DbUrl = process.env["DATABASE_URL"];
-if (DbUrl !== undefined && DbUrl !== "") {
-  const Store2 = new PostgresCheckpointStore(DbUrl);
-  await Store2.Save(CkptName, Ckpt, new Date().toISOString());
-  await Store2.Close();
-  console.log(`saved to Postgres checkpoint "${CkptName}" (no file — Postgres is the store)`);
+// Train in chunks, saving a checkpoint after each — a crash or Stop loses AT MOST CheckEvery steps,
+// and re-running resumes from the last saved checkpoint (nothing done is thrown away).
+const CheckEvery = Math.max(50, Math.floor(EffectiveSteps / 20)); // ~20 saves across the run
+function BuildAt(Step: number): Checkpoint {
+  return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: EffectiveSteps, Step, Corpus: "foundry-filtered" }, { Kind: "Bpe", Merges: Bpe.Merges });
+}
+for (let Start = StartStep; Start < EffectiveSteps; Start += CheckEvery) {
+  const End = Math.min(Start + CheckEvery, EffectiveSteps);
+  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep, { StartStep: Start, EndStep: End, StartMs: GlobalStart });
+  const Ckpt = BuildAt(End);
+  if (CkptStore !== null) {
+    await CkptStore.Save(CkptName, Ckpt, new Date().toISOString());
+    console.log(`checkpoint saved at step ${End}/${EffectiveSteps}`);
+  } else {
+    WriteCheckpointObject(SavePath, Ckpt);
+  }
+}
+if (CkptStore !== null) {
+  await CkptStore.Close();
+  console.log(`saved to Postgres checkpoint "${CkptName}" (trained to step ${EffectiveSteps})`);
 } else {
-  WriteCheckpointObject(SavePath, Ckpt);
   console.log(`saved ${SavePath} (no DATABASE_URL — file store)`);
 }
 

@@ -14,6 +14,10 @@ function Round(X: number): number {
   return Math.round(X * 1e4) / 1e4;
 }
 
+// Train steps [StartStep, EndStep) of a full run of Config.Schedule.MaxSteps. Defaults to the whole
+// run; a caller can train in chunks (saving a checkpoint between them) by advancing the range while
+// the model/optimizer/RNG carry over. The LR schedule always uses the GLOBAL step, so chunking is
+// numerically identical to one continuous run.
 export function TrainLoop(
   Model: Shahd,
   Optimizer: Optimizer,
@@ -22,11 +26,14 @@ export function TrainLoop(
   Config: ResolvedConfig,
   RunLogger: Logger,
   OnStep?: (Step: number, TrainLoss: number, ElapsedMs: number) => void, // lightweight per-step hook (no eval)
+  Range?: { StartStep: number; EndStep: number; StartMs: number },
 ): void {
   const MaxSteps = Config.Schedule.MaxSteps;
-  const StartMs = Date.now();
+  const StartStep = Range?.StartStep ?? 0;
+  const EndStep = Range?.EndStep ?? MaxSteps;
+  const StartMs = Range?.StartMs ?? Date.now();
 
-  for (let Step = 0; Step < MaxSteps; Step++) {
+  for (let Step = StartStep; Step < EndStep; Step++) {
     const Lr = ComputeLr(Step, Config);
     const TrainLoss = AccumulateGradients(Model, Optimizer, TrainLoader, Config.Training.BatchSize);
     const GradNorm = ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
