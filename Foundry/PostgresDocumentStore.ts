@@ -1,13 +1,13 @@
-// Postgres + pgvector implementation of DocumentStore (M3b). Same interface as the in-memory store
-// (which the CI tests cover), so ingestion / reports / dashboard work unchanged against a real
-// database. FindSimilar uses pgvector cosine distance. Integration-verified via Scripts/FoundrySmoke
-// (needs a running Postgres — `docker compose up` + `bun run Scripts/FoundryMigrate.ts`); it is not
-// unit-tested here because CI has no database.
+// Postgres implementation of DocumentStore (M3b). Same interface as the in-memory store (which the CI
+// tests cover), so ingestion / reports / dashboard work unchanged against a real database. The table
+// is a constructor parameter (default "documents") so each data kind gets its own physically-separate
+// table (documents_code, documents_conversation, …) via the same store class. Integration-verified via
+// Scripts/FoundrySmoke; not unit-tested here because CI has no database.
 
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { eq, sql, desc } from "drizzle-orm";
-import { Documents } from "./FoundrySchema.ts";
+import { DocumentsTable } from "./FoundrySchema.ts";
 import type { DocumentRow, DocumentInsert } from "./FoundrySchema.ts";
 import type { DocumentStore, SimilarHit, RepoSummary, FoundryStats } from "./DocumentStore.ts";
 import type { DocumentRecord, Tier } from "./DocumentRecord.ts";
@@ -54,23 +54,29 @@ function FromRow(Row: DocumentRow): DocumentRecord {
 export class PostgresDocumentStore implements DocumentStore {
   private Sql: ReturnType<typeof postgres>;
   private Db: ReturnType<typeof drizzle>;
+  private Table: ReturnType<typeof DocumentsTable>;
+  private OwnsSql: boolean;
 
-  constructor(Url: string) {
-    this.Sql = postgres(Url);
+  // Accepts a connection URL (opens+owns its own client) OR a shared postgres client (so many per-kind
+  // stores can share ONE connection pool instead of opening one each — see FoundryStores).
+  constructor(UrlOrSql: string | ReturnType<typeof postgres>, TableName = "documents") {
+    this.OwnsSql = typeof UrlOrSql === "string";
+    this.Sql = typeof UrlOrSql === "string" ? postgres(UrlOrSql) : UrlOrSql;
     this.Db = drizzle(this.Sql);
+    this.Table = DocumentsTable(TableName);
   }
 
   async Upsert(Doc: DocumentRecord): Promise<void> {
     const Row = ToRow(Doc);
-    await this.Db.insert(Documents).values(Row).onConflictDoUpdate({ target: Documents.id, set: Row });
+    await this.Db.insert(this.Table).values(Row).onConflictDoUpdate({ target: this.Table.id, set: Row });
   }
 
   async All(): Promise<DocumentRecord[]> {
-    return (await this.Db.select().from(Documents)).map(FromRow);
+    return (await this.Db.select().from(this.Table)).map(FromRow);
   }
 
   async ByTier(Tier: Tier): Promise<DocumentRecord[]> {
-    return (await this.Db.select().from(Documents).where(eq(Documents.tier, Tier))).map(FromRow);
+    return (await this.Db.select().from(this.Table).where(eq(this.Table.tier, Tier))).map(FromRow);
   }
 
   async FindSimilar(Embedding: number[], Limit: number): Promise<SimilarHit[]> {
@@ -83,29 +89,29 @@ export class PostgresDocumentStore implements DocumentStore {
   }
 
   async Count(): Promise<number> {
-    const Result = await this.Db.select({ Count: sql<number>`count(*)::int` }).from(Documents);
+    const Result = await this.Db.select({ Count: sql<number>`count(*)::int` }).from(this.Table);
     return Number(Result[0]?.Count ?? 0);
   }
 
   async Sources(): Promise<string[]> {
-    return (await this.Db.selectDistinct({ Source: Documents.source }).from(Documents)).map((R) => R.Source);
+    return (await this.Db.selectDistinct({ Source: this.Table.source }).from(this.Table)).map((R) => R.Source);
   }
 
   async RepoSummaries(): Promise<RepoSummary[]> {
     const Rows = await this.Db
-      .select({ Source: Documents.source, Files: sql<number>`count(*)::int`, Bytes: sql<number>`coalesce(sum(bytes),0)::bigint` })
-      .from(Documents)
-      .groupBy(Documents.source)
+      .select({ Source: this.Table.source, Files: sql<number>`count(*)::int`, Bytes: sql<number>`coalesce(sum(bytes),0)::bigint` })
+      .from(this.Table)
+      .groupBy(this.Table.source)
       .orderBy(desc(sql`count(*)`));
     return Rows.map((R) => ({ Source: R.Source, Files: Number(R.Files), Bytes: Number(R.Bytes) }));
   }
 
   async DocumentsBySource(Source: string, Limit: number): Promise<DocumentRecord[]> {
-    return (await this.Db.select().from(Documents).where(eq(Documents.source, Source)).limit(Limit)).map(FromRow);
+    return (await this.Db.select().from(this.Table).where(eq(this.Table.source, Source)).limit(Limit)).map(FromRow);
   }
 
   async DocumentById(Id: string): Promise<DocumentRecord | null> {
-    const Rows = await this.Db.select().from(Documents).where(eq(Documents.id, Id)).limit(1);
+    const Rows = await this.Db.select().from(this.Table).where(eq(this.Table.id, Id)).limit(1);
     return Rows[0] ? FromRow(Rows[0]) : null;
   }
 
@@ -114,24 +120,24 @@ export class PostgresDocumentStore implements DocumentStore {
     // (which encodes the old license) is intentionally left as-is — it is a dedup key, and SkipRepo
     // by source prevents any future re-ingest that would collide with it.
     const Promote = await this.Db
-      .update(Documents)
+      .update(this.Table)
       .set({ tier: "Filtered", license: NewLicense, rejectReason: null })
-      .where(sql`${Documents.source} = ${Source} and ${Documents.license} = 'NOASSERTION' and ${Documents.quality} >= ${MinQuality}`)
-      .returning({ Id: Documents.id });
+      .where(sql`${this.Table.source} = ${Source} and ${this.Table.license} = 'NOASSERTION' and ${this.Table.quality} >= ${MinQuality}`)
+      .returning({ Id: this.Table.id });
     const Keep = await this.Db
-      .update(Documents)
+      .update(this.Table)
       .set({ license: NewLicense, rejectReason: `low quality (score < ${MinQuality})` })
-      .where(sql`${Documents.source} = ${Source} and ${Documents.license} = 'NOASSERTION' and ${Documents.quality} < ${MinQuality}`)
-      .returning({ Id: Documents.id });
+      .where(sql`${this.Table.source} = ${Source} and ${this.Table.license} = 'NOASSERTION' and ${this.Table.quality} < ${MinQuality}`)
+      .returning({ Id: this.Table.id });
     return { Promoted: Promote.length, KeptLowQuality: Keep.length };
   }
 
   async Stats(): Promise<FoundryStats> {
     const CountExpr = sql<number>`count(*)::int`;
-    const Tiers = await this.Db.select({ Key: Documents.tier, Count: CountExpr }).from(Documents).groupBy(Documents.tier);
-    const Langs = await this.Db.select({ Key: Documents.lang, Count: CountExpr }).from(Documents).groupBy(Documents.lang);
-    const Licenses = await this.Db.select({ Key: Documents.license, Count: CountExpr }).from(Documents).groupBy(Documents.license);
-    const Filtered = await this.Db.select({ Bytes: sql<number>`coalesce(sum(bytes),0)::bigint` }).from(Documents).where(eq(Documents.tier, "Filtered"));
+    const Tiers = await this.Db.select({ Key: this.Table.tier, Count: CountExpr }).from(this.Table).groupBy(this.Table.tier);
+    const Langs = await this.Db.select({ Key: this.Table.lang, Count: CountExpr }).from(this.Table).groupBy(this.Table.lang);
+    const Licenses = await this.Db.select({ Key: this.Table.license, Count: CountExpr }).from(this.Table).groupBy(this.Table.license);
+    const Filtered = await this.Db.select({ Bytes: sql<number>`coalesce(sum(bytes),0)::bigint` }).from(this.Table).where(eq(this.Table.tier, "Filtered"));
 
     const ByTier: Record<Tier, number> = { Filtered: 0, Raw: 0, Rejected: 0 };
     for (const Row of Tiers) if (Row.Key in ByTier) ByTier[Row.Key as Tier] = Number(Row.Count);
@@ -144,6 +150,6 @@ export class PostgresDocumentStore implements DocumentStore {
   }
 
   async Close(): Promise<void> {
-    await this.Sql.end();
+    if (this.OwnsSql) await this.Sql.end(); // don't close a shared client we didn't open
   }
 }

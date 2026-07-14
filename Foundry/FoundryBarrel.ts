@@ -1,6 +1,10 @@
 // Public surface of the Data Foundry (M3) — the tiered, inspectable, owned dataset layer.
 
 export type { DocumentRecord, Tier, Origin } from "./DocumentRecord.ts";
+export { DataKinds, TableForKind, KindForProvider, IsDataKind } from "./DataKinds.ts";
+export type { DataKind } from "./DataKinds.ts";
+export { FoundryStores } from "./FoundryStores.ts";
+export type { KindStat } from "./FoundryStores.ts";
 export { ClassifyDocument } from "./Tiering.ts";
 export type { TierDecision } from "./Tiering.ts";
 export { DetectSpdx, NormalizeLicense } from "./SpdxDetector.ts";

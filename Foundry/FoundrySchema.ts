@@ -8,22 +8,29 @@ import { pgTable, text, integer, real, jsonb } from "drizzle-orm/pg-core";
 
 export const EmbeddingDimensions = 256;
 
-export const Documents = pgTable("documents", {
-  id: text("id").primaryKey(),
-  tier: text("tier").notNull(),
-  origin: text("origin").notNull(),
-  source: text("source").notNull(),
-  license: text("license").notNull(),
-  lang: text("lang").notNull(),
-  content: text("content").notNull(),
-  bytes: integer("bytes").notNull(),
-  quality: real("quality_score").notNull(),
-  contentHash: text("content_hash").notNull(),
-  embedding: jsonb("embedding").$type<number[]>().notNull(),
-  rejectReason: text("reject_reason"),
-  provenance: text("provenance").notNull(),
-  ingestedAt: text("ingested_at").notNull(),
-});
+// One document table's columns. Factory (not a single fixed table) so each data kind can have its own
+// physically-separate table (documents_code, documents_conversation, …) with the identical schema.
+export function DocumentsTable(Name: string) {
+  return pgTable(Name, {
+    id: text("id").primaryKey(),
+    tier: text("tier").notNull(),
+    origin: text("origin").notNull(),
+    source: text("source").notNull(),
+    license: text("license").notNull(),
+    lang: text("lang").notNull(),
+    content: text("content").notNull(),
+    bytes: integer("bytes").notNull(),
+    quality: real("quality_score").notNull(),
+    contentHash: text("content_hash").notNull(),
+    embedding: jsonb("embedding").$type<number[]>().notNull(),
+    rejectReason: text("reject_reason"),
+    provenance: text("provenance").notNull(),
+    ingestedAt: text("ingested_at").notNull(),
+  });
+}
+
+// The default/legacy table (pre-per-kind). Kept for back-compat; kind stores use DocumentsTable(name).
+export const Documents = DocumentsTable("documents");
 
 export type DocumentRow = typeof Documents.$inferSelect;
 export type DocumentInsert = typeof Documents.$inferInsert;
