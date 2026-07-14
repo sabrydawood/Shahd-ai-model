@@ -43,12 +43,27 @@ const BatchSize = Number(ReadArg("--Batch=", "8"));
 const Lr = Number(ReadArg("--Lr=", "0.002"));
 
 // 1) Owned SFT conversations — code samples from the Filtered corpus + generated persona/math/tools.
+const MaxGeneral = Number(ReadArg("--General=", "4000"));
 const { Store, Kind } = ResolveStore();
 const Filtered = await Store.ByTier("Filtered");
 const Samples: CodeSample[] = Filtered.slice(0, 4000).map((D) => ({ Lang: D.Lang, Content: D.Content }));
 const Rng = CreateRngStreams(1234);
 const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { ArithmeticCount: 200, ThinkingCount: 120, PersonaRepeats: 25, MaxCodeConversations: 1500 });
-console.log(`sft: ${Conversations.length} conversations (store=${Kind})`);
+
+// Include REAL collected conversation data (OASST etc. — Lang "text-*", stored as "User: …\n\nAssistant:
+// …"): parse each into an SFT example so the chat model learns from real dialogue, not just the owned
+// synthetic set. This is the link that makes "collect general data -> the model talks" actually work.
+const ConvSystem = "You are Shahd, a helpful assistant.";
+let AddedGeneral = 0;
+for (const Doc of Filtered) {
+  if (AddedGeneral >= MaxGeneral) break;
+  if (!Doc.Lang.startsWith("text-")) continue;
+  const Match = /^User: ([\s\S]*?)\n\nAssistant: ([\s\S]*)$/.exec(Doc.Content);
+  if (Match === null) continue;
+  Conversations.push([{ Role: "System", Content: ConvSystem }, { Role: "User", Content: Match[1]! }, { Role: "Assistant", Content: Match[2]! }]);
+  AddedGeneral++;
+}
+console.log(`sft: ${Conversations.length} conversations (${AddedGeneral} from collected general data; store=${Kind})`);
 
 // 2) SpecialTokenizer = byte-level BPE (trained on the conversation text) + chat/tool special tokens.
 const Specials = [...ChatTokenList, ...ToolTokenList];
