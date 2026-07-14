@@ -47,3 +47,9 @@ App/note.txt
 Plan/
 CLAUDE.md
 
+
+# Local chat memory (bun:sqlite)
+Chat.db
+Chat.db-*
+*.db-shm
+*.db-wal

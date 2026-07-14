@@ -1,29 +1,44 @@
-// Serve the interactive Foundry control panel with a live "Learn" runner. Reads the store + token
-// from the environment (Bun loads .env): Postgres when DATABASE_URL is set. Press "Learn" in the UI
-// to ingest whole repos (public GitHub and/or our own), skipping already-learned ones.
+// Serve the interactive Foundry control panel with a live "Learn" runner + realtime WebSocket + a
+// memory-backed chat. Reads the store + token from the environment (Bun loads .env): Postgres when
+// DATABASE_URL is set. Press "Learn" in the UI to ingest whole repos (public GitHub and/or our own),
+// skipping already-learned ones; open /chat to talk to the loaded checkpoint.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
 import { StartDashboard, IngestFromWeb, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent } from "../Foundry/FoundryBarrel.ts";
-import type { ChatHandler } from "../Brain/Serving/InferenceServer.ts";
-import { CreateChatHandler } from "../Brain/Serving/InferenceServer.ts";
+import { ChatStore } from "../Foundry/ChatStore.ts";
+import { ChatService } from "../Foundry/ChatService.ts";
+import type { ChatStreamFn } from "../Foundry/ChatService.ts";
+import { DescribeModel } from "../Foundry/ModelInfo.ts";
+import type { ModelInfo } from "../Foundry/ModelInfo.ts";
 import { LoadRunnableModel } from "../Brain/Checkpoint/LoadRunnableModel.ts";
+import { GuardedGenerateStream } from "../Brain/Safety/GuardedGenerate.ts";
+import { RenderMessages } from "../Brain/Serving/RenderChat.ts";
+import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
+import { SeededRng } from "../Brain/Random/SeededRng.ts";
 import { ResolveStore, GitHubToken } from "./FoundryEnv.ts";
 import { ReadArg } from "./ScriptArgs.ts";
 import { existsSync } from "node:fs";
 
 const { Store, Kind } = ResolveStore();
 
-// Best-effort: load a checkpoint so the /chat page works. If none exists (or loading fails), the
-// dashboard still serves and /api/chat returns a clear "no model loaded" message.
-function LoadChat(): { Chat: ChatHandler | undefined; Note: string } {
+// Best-effort: load a checkpoint so the /chat page works (streaming + persistent memory). If none
+// exists (or loading fails), the dashboard still serves and chat reports "no model loaded".
+function LoadChat(): { Chat?: ChatService; Model: ModelInfo | null; Note: string } {
   const Path = process.env["FOUNDRY_CHECKPOINT"] ?? ReadArg("--Checkpoint=", "Checkpoints/Corpus.ckpt");
-  if (!existsSync(Path)) return { Chat: undefined, Note: `no checkpoint at ${Path}` };
+  if (!existsSync(Path)) return { Model: null, Note: `no checkpoint at ${Path} (chat disabled)` };
   try {
     const { Model, Tokenizer, Config } = LoadRunnableModel(Path);
-    return { Chat: CreateChatHandler(Model, Tokenizer, Config), Note: `chat model: ${Path}` };
+    let Counter = 0;
+    const Stream: ChatStreamFn = (Messages, Opts, OnDelta) => {
+      const Prompt = RenderMessages(Messages.map((M) => ({ role: M.Role, content: M.Content })));
+      const Rng = new SeededRng(Config.Training.Seed + Counter++);
+      return GuardedGenerateStream(Model, Tokenizer, Prompt, Opts.MaxTokens, { ...DefaultSampling, Temperature: Opts.Temperature }, Rng, Config, OnDelta);
+    };
+    const Chats = new ChatStore(process.env["CHAT_DB"] ?? "Chat.db");
+    return { Chat: new ChatService(Chats, Stream), Model: DescribeModel(Model), Note: `chat model: ${Path}` };
   } catch (Caught) {
-    return { Chat: undefined, Note: `chat disabled: ${(Caught as Error).message}` };
+    return { Model: null, Note: `chat disabled: ${(Caught as Error).message}` };
   }
 }
 
@@ -42,12 +57,13 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
   if (Settings.Source !== "github") {
     Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo }));
   }
-  const Stats = await IngestFromWeb(Providers, [Settings.Query], Store, new Date().toISOString(), Settings.MaxRepos);
+  const OnProgress = (Repo: string, Done: number, Total: number): void => OnEvent({ kind: "repo-progress", repo: Repo, filesDone: Done, filesTotal: Total });
+  const Stats = await IngestFromWeb(Providers, [Settings.Query], Store, new Date().toISOString(), Settings.MaxRepos, 256, OnProgress);
   OnEvent({ kind: "done", ingested: Stats.Ingested });
 };
 
 const Port = Number(ReadArg("--Port=", "8090"));
-const { Chat, Note } = LoadChat();
-StartDashboard(Store, Port, Learn, Chat);
+const { Chat, Model, Note } = LoadChat();
+StartDashboard(Store, Port, Learn, { Chat, Model });
 console.log(`Foundry control panel: http://localhost:${Port}  (store=${Kind}, ${await Store.Count()} docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
 console.log(`  ${Note}`);

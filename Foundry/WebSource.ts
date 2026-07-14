@@ -13,6 +13,10 @@ export type WebProvider = {
   Fetch: (Query: string, Limit: number) => Promise<SourceInput[]>;
 };
 
+// Per-repo file-level ingestion progress: which repo, how many of its files are stored, out of how
+// many. Lets the dashboard show a bar for the repo currently being ingested, not just "done".
+export type IngestProgress = (Repo: string, FilesDone: number, FilesTotal: number) => void;
+
 export async function IngestFromWeb(
   Providers: WebProvider[],
   Queries: string[],
@@ -20,6 +24,7 @@ export async function IngestFromWeb(
   IngestedAt: string,
   PerQuery = 10,
   EmbeddingDim = 256,
+  OnProgress?: IngestProgress,
 ): Promise<IngestStats> {
   const Collected: SourceInput[] = [];
   for (const Provider of Providers) {
@@ -31,5 +36,24 @@ export async function IngestFromWeb(
       }
     }
   }
-  return IngestDocuments(Collected, Store, IngestedAt, EmbeddingDim);
+
+  // Group the collected files by repo (Source) so ingestion runs — and reports progress — per repo,
+  // preserving arrival order. IngestDocuments keeps its per-document try/catch resilience unchanged.
+  const ByRepo = new Map<string, SourceInput[]>();
+  for (const Input of Collected) {
+    const Group = ByRepo.get(Input.Source) ?? [];
+    Group.push(Input);
+    ByRepo.set(Input.Source, Group);
+  }
+
+  const Total: IngestStats = { Ingested: 0, ByTier: { Filtered: 0, Raw: 0, Rejected: 0 }, Failed: 0 };
+  for (const [Repo, Group] of ByRepo) {
+    const Stats = await IngestDocuments(Group, Store, IngestedAt, EmbeddingDim, (Done, TotalFiles) => OnProgress?.(Repo, Done, TotalFiles));
+    Total.Ingested += Stats.Ingested;
+    Total.Failed += Stats.Failed;
+    Total.ByTier.Filtered += Stats.ByTier.Filtered;
+    Total.ByTier.Raw += Stats.ByTier.Raw;
+    Total.ByTier.Rejected += Stats.ByTier.Rejected;
+  }
+  return Total;
 }

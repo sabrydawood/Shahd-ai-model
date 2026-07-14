@@ -27,10 +27,12 @@ export async function IngestDocuments(
   Store: DocumentStore,
   IngestedAt: string,
   EmbeddingDim = 256,
+  OnEach?: (Done: number, Total: number, Provenance: string) => void, // per-document progress hook
 ): Promise<IngestStats> {
   const ByTier: Record<Tier, number> = { Filtered: 0, Raw: 0, Rejected: 0 };
   let Ingested = 0;
   let Failed = 0;
+  let Done = 0;
   for (const Input of Inputs) {
     // Sanitize FIRST so id/hash/embedding/bytes are all computed on the exact bytes we will store —
     // and so a NUL/lone-surrogate from a binary-ish file can never make the store reject the row.
@@ -66,6 +68,8 @@ export async function IngestDocuments(
       Failed++;
       console.warn(`IngestDocuments: skipped ${Input.Provenance}: ${(Caught as Error).message}`);
     }
+    Done++;
+    OnEach?.(Done, Inputs.length, Input.Provenance);
   }
   return { Ingested, ByTier, Failed };
 }

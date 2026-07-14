@@ -1,23 +1,30 @@
-// Interactive Foundry control panel (M9). A Bun-served page + API over a DocumentStore:
-//   GET  /                  the control-panel page
-//   GET  /api/stats         aggregate counts (tiers/langs/licenses/bytes)
-//   GET  /api/repos         per-repo rollup (accordion list)
-//   GET  /api/documents     ?source=… files of one repo (accordion contents)
-//   GET  /api/config        whether a Learn runner is wired
-//   POST /api/learn         start a Learn run with the posted settings (one at a time)
-//   GET  /api/learn/stream  Server-Sent Events streaming the run's progress
-// The Learn runner is INJECTED (a mock in tests; the real provider-backed one at serving time), so
-// the handler is testable and never imports the network/fs providers itself.
+// Interactive Foundry control panel (M9/M11/M13). A Bun-served page + JSON API + a WebSocket for
+// realtime push over a DocumentStore:
+//   GET  /                     the control-panel page      GET  /chat            the chat page
+//   GET  /api/stats            aggregate counts            GET  /api/repos       per-repo rollup
+//   GET  /api/system           host + compute snapshot     GET  /api/model       loaded-model breakdown
+//   GET  /api/documents?source files of one repo           GET  /api/file?id     one file's full content
+//   GET  /api/chat/conversations   history list            GET  /api/chat/conversation?id  its messages
+//   POST /api/chat/delete      remove a conversation       POST /api/learn       start a Learn run
+//   GET  /api/learn/stream     SSE progress (fallback)     WS   /ws              realtime push + chat
+// The WebSocket pushes system/stats snapshots on a ticker, streams Learn progress (incl. per-repo
+// file progress), and streams chat token-by-token. Learn runner + chat service + model info are
+// INJECTED so the handler is testable and never imports the network/model layers itself.
 
+import type { Server, ServerWebSocket } from "bun";
 import type { DocumentStore } from "./DocumentStore.ts";
 import type { LearnSettings, LearnEvent, LearnFn } from "./DashboardTypes.ts";
 import type { RepoLevel } from "./RepoQuality.ts";
-import type { ChatHandler } from "../Brain/Serving/InferenceServer.ts";
+import type { ChatService } from "./ChatService.ts";
+import type { ModelInfo } from "./ModelInfo.ts";
 import { DashboardHtml } from "./DashboardHtml.ts";
 import { ChatHtml } from "./ChatHtml.ts";
 import { GetSystemInfo } from "./SystemInfo.ts";
 
 export type DashboardHandler = (Req: Request) => Promise<Response>;
+export type DashboardOptions = { Chat?: ChatService; Model?: ModelInfo | null };
+type WsData = Record<string, never>;
+type Ws = ServerWebSocket<WsData>;
 
 type JobState = { Running: boolean; Events: LearnEvent[]; Listeners: Set<(Event: LearnEvent) => void> };
 
@@ -48,33 +55,43 @@ function Json(Data: unknown, Status = 200): Response {
   return Response.json(Data, { status: Status });
 }
 
-export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Chat?: ChatHandler): DashboardHandler {
+// Everything the panel needs, built once and shared by the HTTP handler and the WebSocket handler.
+export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Options: DashboardOptions = {}) {
   const Job: JobState = { Running: false, Events: [], Listeners: new Set() };
+  let Bound: Server<WsData> | null = null;
+  const Publish = (Message: unknown): void => {
+    Bound?.publish("all", JSON.stringify(Message));
+  };
+
   const Emit = (Event: LearnEvent): void => {
     Job.Events.push(Event);
     for (const Listener of Job.Listeners) Listener(Event);
+    Publish({ type: "learn", event: Event });
     if (Event.kind === "done" || Event.kind === "error") Job.Running = false;
   };
 
-  return async (Req: Request): Promise<Response> => {
+  const StartLearn = (Settings: LearnSettings): boolean => {
+    if (Learn === undefined || Job.Running) return false;
+    Job.Running = true;
+    Job.Events = [];
+    Emit({ kind: "start", query: Settings.Query, source: Settings.Source });
+    void Learn(Settings, Emit).catch((Caught) => Emit({ kind: "error", message: (Caught as Error).message }));
+    return true;
+  };
+
+  const Fetch = async (Req: Request): Promise<Response> => {
     const Url = new URL(Req.url);
     const Path = Url.pathname;
 
-    if (Path === "/" || Path === "/index.html") {
-      return new Response(DashboardHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
-    }
-    if (Path === "/chat" || Path === "/chat.html") {
-      return new Response(ChatHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
-    }
-    if (Path === "/api/chat") {
-      if (Chat === undefined) return Json({ error: "no model loaded — train a checkpoint first (see Checkpoints/)" }, 501);
-      if (Req.method !== "POST") return Json({ error: "POST only" }, 405);
-      return Chat(Req);
-    }
+    if (Path === "/" || Path === "/index.html") return new Response(DashboardHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    if (Path === "/chat" || Path === "/chat.html") return new Response(ChatHtml, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+
     if (Path === "/api/stats") return Json(await Store.Stats());
     if (Path === "/api/repos") return Json(await Store.RepoSummaries());
     if (Path === "/api/system") return Json(GetSystemInfo());
-    if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, running: Job.Running });
+    if (Path === "/api/model") return Json(Options.Model ?? null);
+    if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, chatEnabled: Options.Chat !== undefined, running: Job.Running });
+
     if (Path === "/api/documents") {
       const Source = Url.searchParams.get("source") ?? "";
       const Limit = ToNum(Url.searchParams.get("limit"), 500);
@@ -87,15 +104,19 @@ export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Ch
       return Json({ provenance: Doc.Provenance, lang: Doc.Lang, tier: Doc.Tier, bytes: Doc.Bytes, license: Doc.License, origin: Doc.Origin, content: Doc.Content });
     }
 
+    if (Path === "/api/chat/conversations") return Json(Options.Chat?.ListConversations() ?? []);
+    if (Path === "/api/chat/conversation") return Json(Options.Chat?.Messages(Url.searchParams.get("id") ?? "") ?? []);
+    if (Path === "/api/chat/delete" && Req.method === "POST") {
+      const Body = (await Req.json().catch(() => ({}))) as { id?: string };
+      if (Options.Chat !== undefined && typeof Body.id === "string") Options.Chat.Delete(Body.id);
+      return Json({ ok: true });
+    }
+
     if (Path === "/api/learn" && Req.method === "POST") {
       if (Learn === undefined) return Json({ error: "read-only dashboard (no learn runner wired)" }, 501);
       if (Job.Running) return Json({ error: "a learn run is already in progress" }, 409);
       const Body = (await Req.json().catch(() => ({}))) as Record<string, unknown>;
-      const Settings = ParseSettings(Body);
-      Job.Running = true;
-      Job.Events = [];
-      Emit({ kind: "start", query: Settings.Query, source: Settings.Source });
-      void Learn(Settings, Emit).catch((Caught) => Emit({ kind: "error", message: (Caught as Error).message }));
+      StartLearn(ParseSettings(Body));
       return Json({ started: true }, 202);
     }
 
@@ -125,7 +146,7 @@ export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Ch
             try {
               Controller.enqueue(Encoder.encode(`data: ${JSON.stringify(Event)}\n\n`));
             } catch {
-              End(); // the connection was closed underneath us — stop listening so Emit never throws
+              End();
             }
           };
           for (const Event of Job.Events) Send(Event);
@@ -139,17 +160,96 @@ export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Ch
           };
           Job.Listeners.add(Listener);
         },
-        cancel: Drop, // client disconnected — remove the listener
+        cancel: Drop,
       });
       return new Response(Stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
 
     return new Response("not found", { status: 404 });
   };
+
+  // WebSocket: push snapshots on open, stream Learn progress, and stream chat token-by-token.
+  const SendSnapshots = (Socket: Ws): void => {
+    Socket.send(JSON.stringify({ type: "system", data: GetSystemInfo() }));
+    Socket.send(JSON.stringify({ type: "model", data: Options.Model ?? null }));
+    void Store.Stats().then((S) => Socket.send(JSON.stringify({ type: "stats", data: S })));
+    for (const Event of Job.Events) Socket.send(JSON.stringify({ type: "learn", event: Event }));
+  };
+
+  const HandleChat = async (Socket: Ws, Msg: { convId?: string; message?: string; temperature?: number; maxTokens?: number }): Promise<void> => {
+    const Chat = Options.Chat;
+    const ConvId = Msg.convId ?? "";
+    if (Chat === undefined) {
+      Socket.send(JSON.stringify({ type: "chat-error", convId: ConvId, error: "no model loaded — train a checkpoint first (see Checkpoints/)" }));
+      return;
+    }
+    if (typeof Msg.message !== "string" || Msg.message.trim() === "" || ConvId === "") {
+      Socket.send(JSON.stringify({ type: "chat-error", convId: ConvId, error: "empty message" }));
+      return;
+    }
+    try {
+      const Opts = { Temperature: ToNum(Msg.temperature, 0.8), MaxTokens: ToNum(Msg.maxTokens, 160) };
+      await Chat.Turn(ConvId, Msg.message, Opts, (Delta) => Socket.send(JSON.stringify({ type: "chat-delta", convId: ConvId, delta: Delta })));
+      Socket.send(JSON.stringify({ type: "chat-done", convId: ConvId }));
+    } catch (Caught) {
+      Socket.send(JSON.stringify({ type: "chat-error", convId: ConvId, error: (Caught as Error).message }));
+    }
+  };
+
+  const WebSocket = {
+    open: (Socket: Ws): void => {
+      Socket.subscribe("all");
+      SendSnapshots(Socket);
+    },
+    message: (Socket: Ws, Raw: string | Buffer): void => {
+      let Msg: { type?: string; settings?: Record<string, unknown> } & Record<string, unknown>;
+      try {
+        Msg = JSON.parse(typeof Raw === "string" ? Raw : Raw.toString());
+      } catch {
+        return;
+      }
+      if (Msg.type === "learn") {
+        if (!StartLearn(ParseSettings(Msg.settings ?? {}))) {
+          Socket.send(JSON.stringify({ type: "learn", event: { kind: "error", message: Learn === undefined ? "no learn runner wired" : "a run is already in progress" } }));
+        }
+      } else if (Msg.type === "chat") {
+        void HandleChat(Socket, Msg as { convId?: string; message?: string; temperature?: number; maxTokens?: number });
+      }
+    },
+  };
+
+  const AttachServer = (S: Server<WsData>): void => {
+    Bound = S;
+  };
+  const Snapshot = (): void => {
+    Publish({ type: "system", data: GetSystemInfo() });
+    void Store.Stats().then((S) => Publish({ type: "stats", data: S }));
+  };
+
+  return { Fetch, WebSocket, AttachServer, Snapshot };
 }
 
-export function StartDashboard(Store: DocumentStore, Port = 8090, Learn?: LearnFn, Chat?: ChatHandler): ReturnType<typeof Bun.serve> {
+export function CreateDashboardHandler(Store: DocumentStore, Learn?: LearnFn, Options: DashboardOptions = {}): DashboardHandler {
+  return CreateDashboardParts(Store, Learn, Options).Fetch;
+}
+
+export function StartDashboard(Store: DocumentStore, Port = 8090, Learn?: LearnFn, Options: DashboardOptions = {}): Server<WsData> {
+  const Parts = CreateDashboardParts(Store, Learn, Options);
   // idleTimeout 0 disables Bun's 10s request timeout, which would otherwise kill a long-lived SSE
   // stream mid-learn (a whole-repo ingest can take much longer than 10s).
-  return Bun.serve({ port: Port, idleTimeout: 0, fetch: CreateDashboardHandler(Store, Learn, Chat) });
+  const Instance = Bun.serve<WsData>({
+    port: Port,
+    idleTimeout: 0,
+    fetch: (Req: Request, Serv: Server<WsData>): Response | Promise<Response> | undefined => {
+      if (new URL(Req.url).pathname === "/ws") {
+        if (Serv.upgrade(Req, { data: {} })) return undefined;
+        return new Response("websocket upgrade failed", { status: 400 });
+      }
+      return Parts.Fetch(Req);
+    },
+    websocket: Parts.WebSocket,
+  });
+  Parts.AttachServer(Instance);
+  setInterval(() => Parts.Snapshot(), 3000); // realtime system + stats push
+  return Instance;
 }
