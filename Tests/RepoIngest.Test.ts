@@ -64,6 +64,35 @@ test("whole-repo provider ingests every file of a qualifying repo and skips low-
   expect(Docs.every((D) => D.Origin === "web-permissive" && D.License === "MIT")).toBe(true);
 });
 
+test("incremental collect: OnRepoReady stores each repo before the next is downloaded", async () => {
+  const Tar1 = await Tar(["A", "B", "C"].map((N) => ({ name: `r1-sha/src/${N}.ts`, data: Code(N) })));
+  const Tar2 = await Tar(["D", "E"].map((N) => ({ name: `r2-sha/src/${N}.ts`, data: Code(N) })));
+  const Http: HttpJson = async () => ({
+    items: [
+      { full_name: "acme/r1", default_branch: "main", license: { spdx_id: "MIT" } },
+      { full_name: "acme/r2", default_branch: "main", license: { spdx_id: "MIT" } },
+    ],
+  });
+  const BytesFetcher: FetchBytes = async (Url) => (Url.includes("acme/r1") ? Tar1 : Tar2);
+  const Order: string[] = [];
+  const Ready: { repo: string; count: number }[] = [];
+  const Provider = CreateGitHubRepoProvider({
+    Http,
+    FetchBytes: BytesFetcher,
+    MinLevel: "medium",
+    OnRepo: (Info) => Order.push("assess:" + Info.Repo),
+    OnRepoReady: async (Source, Files) => {
+      Order.push("store:" + Source);
+      Ready.push({ repo: Source, count: Files.length });
+    },
+  });
+  const Ret = await Provider.Fetch("q", 5);
+  expect(Ret.length).toBe(0); // incremental mode: nothing collected/returned
+  expect(Ready).toEqual([{ repo: "acme/r1", count: 3 }, { repo: "acme/r2", count: 2 }]);
+  // each repo is STORED before the next is ASSESSED — proves store-as-you-go, not collect-all-then-store
+  expect(Order).toEqual(["assess:acme/r1", "store:acme/r1", "assess:acme/r2", "store:acme/r2"]);
+});
+
 test("expanded languages: css/html/vue/sql are recognized as code (M8)", () => {
   expect(IsSubstantiveCodePath("src/styles/main.css")).toBe(true);
   expect(IsSubstantiveCodePath("src/Page.vue")).toBe(true);

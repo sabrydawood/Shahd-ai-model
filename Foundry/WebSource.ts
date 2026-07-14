@@ -13,6 +13,11 @@ export type WebProvider = {
   Fetch: (Query: string, Limit: number) => Promise<SourceInput[]>;
 };
 
+// Incremental sink: a repo provider calls this the moment a repo is downloaded+assessed, so the
+// caller can STORE that repo before the next one downloads (durable progress, low memory). When a
+// provider is given a sink it streams into it and returns []; otherwise it collects and returns all.
+export type RepoSink = (Source: string, Files: SourceInput[]) => Promise<void>;
+
 // Per-repo file-level ingestion progress: which repo, how many of its files are stored, out of how
 // many. Lets the dashboard show a bar for the repo currently being ingested, not just "done".
 export type IngestProgress = (Repo: string, FilesDone: number, FilesTotal: number) => void;

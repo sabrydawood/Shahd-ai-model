@@ -6,7 +6,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, basename } from "node:path";
-import type { WebProvider } from "./WebSource.ts";
+import type { WebProvider, RepoSink } from "./WebSource.ts";
 import type { SourceInput } from "./Ingest.ts";
 import type { RepoFile } from "./RepoArchive.ts";
 import { DefaultRepoLimits } from "./RepoArchive.ts";
@@ -60,6 +60,7 @@ export type LocalRepoOptions = {
   MaxContentBytes?: number;
   SkipRepo?: (Repo: string) => boolean;
   OnRepo?: (Info: RepoIngestInfo) => void;
+  OnRepoReady?: RepoSink; // when set, each repo is streamed here (stored) right after it is walked
 };
 
 export function CreateLocalRepoProvider(Options: LocalRepoOptions): WebProvider {
@@ -83,16 +84,17 @@ export function CreateLocalRepoProvider(Options: LocalRepoOptions): WebProvider 
         const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
         Options.OnRepo?.({ Repo: Name, License, Assessment, Ingested });
         if (!Ingested) continue;
-        for (const File of Files) {
-          Out.push({
-            Source: Name,
-            License,
-            Lang: LangForPath(File.Path),
-            Content: File.Content,
-            Provenance: `${Root}/${File.Path}`,
-            Origin: "owned",
-          });
-        }
+        const Inputs: SourceInput[] = Files.map((File) => ({
+          Source: Name,
+          License,
+          Lang: LangForPath(File.Path),
+          Content: File.Content,
+          Provenance: `${Root}/${File.Path}`,
+          Origin: "owned",
+        }));
+        // Incremental: store this repo NOW. Batch: collect for the caller.
+        if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Name, Inputs);
+        else Out.push(...Inputs);
       }
       return Out;
     },

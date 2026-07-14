@@ -4,7 +4,7 @@
 // are skipped (understand the level, learn from the good ones). Both fetchers are injected (mock in
 // tests; real GitHub by default) — a token is recommended for the tarball rate limit.
 
-import type { WebProvider } from "./WebSource.ts";
+import type { WebProvider, RepoSink } from "./WebSource.ts";
 import type { SourceInput } from "./Ingest.ts";
 import type { HttpJson, FetchBytes } from "./GitHubHttp.ts";
 import { DefaultGitHubJson, DefaultGitHubBytes } from "./GitHubHttp.ts";
@@ -26,6 +26,7 @@ export type GitHubRepoOptions = {
   MinLevel?: RepoLevel; // skip repos below this level
   SkipRepo?: (Repo: string) => boolean; // skip already-learned repos (before download)
   OnRepo?: (Info: RepoIngestInfo) => void; // progress/reporting hook
+  OnRepoReady?: RepoSink; // when set, each repo is streamed here (stored) right after download
 };
 
 // GitHub search returns at most 100 results per page and 1000 total per query.
@@ -63,16 +64,17 @@ export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebPr
         const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
         Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested });
         if (!Ingested) continue; // skip low-level repos entirely
-        for (const File of Files) {
-          Out.push({
-            Source: Repo.full_name,
-            License,
-            Lang: LangForPath(File.Path),
-            Content: File.Content,
-            Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
-            Origin: "web-permissive",
-          });
-        }
+        const Inputs: SourceInput[] = Files.map((File) => ({
+          Source: Repo.full_name,
+          License,
+          Lang: LangForPath(File.Path),
+          Content: File.Content,
+          Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
+          Origin: "web-permissive",
+        }));
+        // Incremental: store this repo NOW (before downloading the next). Batch: collect for the caller.
+        if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Repo.full_name, Inputs);
+        else Out.push(...Inputs);
       }
       return Out;
     },

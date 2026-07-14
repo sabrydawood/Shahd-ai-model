@@ -5,8 +5,8 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestFromWeb, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
-import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider } from "../Foundry/FoundryBarrel.ts";
+import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
 import { InMemoryChatStore } from "../Foundry/InMemoryChatStore.ts";
@@ -101,19 +101,32 @@ const Learn: LearnFn = async (Settings, OnEvent) => {
     const Event: LearnEvent = { kind: "repo", repo: Info.Repo, level: Info.Assessment.Level, files: Info.Assessment.FileCount, bytes: Info.Assessment.TotalBytes, ingested: Info.Ingested, reason: Info.Reason ?? null };
     OnEvent(Event);
   };
+  // INCREMENTAL: store each repo the moment it is downloaded (before the next), so a crash keeps what
+  // is already stored, memory stays low, and the log reflects real storage.
+  const IngestedAt = new Date().toISOString();
+  let TotalIngested = 0;
+  const OnRepoReady = async (Source: string, Files: SourceInput[]): Promise<void> => {
+    const Stride = Math.max(1, Math.floor(Files.length / 50)); // ~50 progress updates/repo
+    const Stats = await IngestDocuments(Files, Store, IngestedAt, 256, (Done, Total) => {
+      if (Done % Stride === 0 || Done === Total) OnEvent({ kind: "repo-progress", repo: Source, filesDone: Done, filesTotal: Total });
+    });
+    TotalIngested += Stats.Ingested;
+  };
   const Providers: WebProvider[] = [];
   if (Settings.Source !== "local") {
-    Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo }));
+    Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo, OnRepoReady }));
   }
   if (Settings.Source !== "github") {
-    Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo }));
+    Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepo, OnRepoReady }));
   }
-  const OnProgress = (Repo: string, Done: number, Total: number): void => {
-    const Stride = Math.max(1, Math.floor(Total / 50));
-    if (Done % Stride === 0 || Done === Total) OnEvent({ kind: "repo-progress", repo: Repo, filesDone: Done, filesTotal: Total });
-  };
-  const Stats = await IngestFromWeb(Providers, [Settings.Query], Store, new Date().toISOString(), Settings.MaxRepos, 256, OnProgress);
-  OnEvent({ kind: "done", ingested: Stats.Ingested });
+  for (const Provider of Providers) {
+    try {
+      await Provider.Fetch(Settings.Query, Settings.MaxRepos); // repos stream into OnRepoReady as they arrive
+    } catch {
+      // a provider/query failure is non-fatal — what was already stored stays
+    }
+  }
+  OnEvent({ kind: "done", ingested: TotalIngested });
 };
 
 // STAGE 2 — Train the model on the collected corpus (subprocess: never blocks the dashboard, can run
