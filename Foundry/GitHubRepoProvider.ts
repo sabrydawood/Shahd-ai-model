@@ -28,6 +28,7 @@ export type GitHubRepoOptions = {
   OnRepoStart?: (Repo: string) => void; // fired BEFORE a repo's tarball download (a "working" signal)
   OnRepo?: (Info: RepoIngestInfo) => void; // progress/reporting hook
   OnRepoReady?: RepoSink; // when set, each repo is streamed here (stored) right after download
+  Log?: (Message: string) => void; // server-console trail (default console.log): every repo's fate
 };
 
 // GitHub search returns at most 100 results per page and 1000 total per query.
@@ -39,45 +40,83 @@ export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebPr
   const Fetch = Options.FetchBytes ?? DefaultGitHubBytes(Options.Token);
   const Limits = { MaxFiles: Options.MaxFilesPerRepo, MaxBytes: Options.MaxBytesPerRepo, MaxContentBytes: Options.MaxContentBytesPerRepo };
   const MinLevel = Options.MinLevel ?? "medium";
+  const Log = Options.Log ?? ((Message: string): void => console.log(Message));
 
   return {
     Name: "github-repo",
     Fetch: async (Query: string, Limit: number): Promise<SourceInput[]> => {
-      // Paginate the search so MaxRepos beyond 100 is honored (up to GitHub's 1000-result cap).
+      // Paginate the search so MaxRepos beyond 100 is honored (up to GitHub's 1000-result cap). A
+      // search failure (bad token / rate limit) is logged and stops pagination — we process whatever
+      // pages already came back instead of throwing away the whole run.
       const Want = Math.min(Limit, SearchMaxResults);
       const Repos: RepoItem[] = [];
       for (let Page = 1; Repos.length < Want && Page <= Math.ceil(SearchMaxResults / SearchPerPage); Page++) {
         const PerPage = Math.min(SearchPerPage, Want - Repos.length);
-        const Search = (await Http(`https://api.github.com/search/repositories?q=${encodeURIComponent(Query)}&per_page=${PerPage}&page=${Page}`)) as SearchResult;
-        const Items = Search.items ?? [];
-        Repos.push(...Items);
-        if (Items.length < PerPage) break; // no more results
+        try {
+          const Search = (await Http(`https://api.github.com/search/repositories?q=${encodeURIComponent(Query)}&per_page=${PerPage}&page=${Page}`)) as SearchResult;
+          const Items = Search.items ?? [];
+          Log(`[gh] search "${Query}" page ${Page}: ${Items.length} repos`);
+          Repos.push(...Items);
+          if (Items.length < PerPage) break; // no more results
+        } catch (Caught) {
+          Log(`[gh] SEARCH ERROR "${Query}" page ${Page}: ${(Caught as Error).message}`);
+          break;
+        }
       }
+      Log(`[gh] search "${Query}": ${Repos.length} repos found (want ${Want})`);
+
+      // Per-repo counters so the run ends with an auditable summary — the answer to "why did it only
+      // do N?" without adding a debugger.
+      let SkippedLearned = 0;
+      let SkippedLevel = 0;
+      let Errored = 0;
+      let Stored = 0;
+      let StoredFiles = 0;
       const Out: SourceInput[] = [];
       for (const Repo of Repos) {
         const License = Repo.license?.spdx_id ?? "unknown";
         if (Options.SkipRepo?.(Repo.full_name) === true) {
+          SkippedLearned++;
+          Log(`[gh] skip (already learned): ${Repo.full_name}`);
           Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: "already learned" });
           continue; // don't re-download a repo we already ingested
         }
-        Options.OnRepoStart?.(Repo.full_name); // signal work before the (slow) tarball download
-        const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
-        const Assessment = AssessRepo(Files);
-        const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
-        Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested });
-        if (!Ingested) continue; // skip low-level repos entirely
-        const Inputs: SourceInput[] = Files.map((File) => ({
-          Source: Repo.full_name,
-          License,
-          Lang: LangForPath(File.Path),
-          Content: File.Content,
-          Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
-          Origin: "web-permissive",
-        }));
-        // Incremental: store this repo NOW (before downloading the next). Batch: collect for the caller.
-        if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Repo.full_name, Inputs);
-        else Out.push(...Inputs);
+        Options.OnRepoStart?.(Repo.full_name); // signal work before download; THROWS on Stop (propagates)
+        // One bad repo — a 403 secondary rate-limit, a giant tarball, a network blip — must NOT end the
+        // whole run. Wrap the download/assess/ingest so a failure is logged and we move to the next repo.
+        try {
+          Log(`[gh] downloading ${Repo.full_name} (license ${License})…`);
+          const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
+          const Assessment = AssessRepo(Files);
+          const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
+          Log(`[gh] ${Repo.full_name}: level=${Assessment.Level} files=${Assessment.FileCount} bytes=${Assessment.TotalBytes} -> ${Ingested ? "ingest" : `skip (below ${MinLevel})`}`);
+          Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested, Reason: Ingested ? undefined : `level ${Assessment.Level} below minimum ${MinLevel}` });
+          if (!Ingested) {
+            SkippedLevel++;
+            continue; // skip low-level repos entirely
+          }
+          const Inputs: SourceInput[] = Files.map((File) => ({
+            Source: Repo.full_name,
+            License,
+            Lang: LangForPath(File.Path),
+            Content: File.Content,
+            Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
+            Origin: "web-permissive",
+          }));
+          // Incremental: store this repo NOW (before downloading the next). Batch: collect for the caller.
+          if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Repo.full_name, Inputs);
+          else Out.push(...Inputs);
+          Stored++;
+          StoredFiles += Inputs.length;
+          Log(`[gh] stored ${Repo.full_name}: ${Inputs.length} files`);
+        } catch (Caught) {
+          Errored++;
+          const Message = (Caught as Error).message;
+          Log(`[gh] ERROR ${Repo.full_name}: ${Message}`);
+          Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: `error: ${Message}` });
+        }
       }
+      Log(`[gh] summary "${Query}": found=${Repos.length} alreadyLearned=${SkippedLearned} belowLevel=${SkippedLevel} errored=${Errored} stored=${Stored} repos (${StoredFiles} files)`);
       return Out;
     },
   };

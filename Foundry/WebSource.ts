@@ -36,8 +36,9 @@ export async function IngestFromWeb(
     for (const Query of Queries) {
       try {
         Collected.push(...(await Provider.Fetch(Query, PerQuery)));
-      } catch {
-        // A provider/query failure is non-fatal — skip it and keep going.
+      } catch (Caught) {
+        // A provider/query failure is non-fatal — skip it and keep going — but log it, never swallow.
+        console.warn(`[web] provider ${Provider.Name} query "${Query}" failed: ${(Caught as Error).message}`);
       }
     }
   }

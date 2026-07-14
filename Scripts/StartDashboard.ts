@@ -143,13 +143,23 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
     Providers.push(CreateLocalRepoProvider({ Roots: Settings.Repos, MinLevel: Settings.MinLevel, MaxFiles: Settings.MaxFilesPerRepo, MaxBytes: Settings.MaxBytesPerRepo, MaxContentBytes: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));
   }
   OnEvent({ kind: "scanning", label: "searching for repos…" });
+  console.log(`[learn] start: source=${Settings.Source} query="${Settings.Query}" maxRepos=${Settings.MaxRepos} minLevel=${Settings.MinLevel} skipLearned=${Settings.SkipLearned} (already know ${Learned.size} repos)`);
   for (const Provider of Providers) {
     try {
       await Provider.Fetch(Settings.Query, Settings.MaxRepos); // repos stream into OnRepoReady as they arrive
-    } catch {
-      // a provider/query failure is non-fatal — what was already stored stays
+    } catch (Caught) {
+      // A provider failure is non-fatal — what was already stored stays — but it is NEVER swallowed:
+      // the user's Stop surfaces as a clean note, any real error is logged AND shown in the dashboard.
+      const Message = (Caught as Error).message;
+      if (Message.includes("stopped by user")) {
+        console.log(`[learn] stopped by user during ${Provider.Name}`);
+      } else {
+        console.warn(`[learn] provider ${Provider.Name} failed: ${Message}`);
+        OnEvent({ kind: "error", message: `${Provider.Name}: ${Message}` });
+      }
     }
   }
+  console.log(`[learn] done: ingested ${TotalIngested} files this run`);
   OnEvent({ kind: "done", ingested: TotalIngested });
 };
 

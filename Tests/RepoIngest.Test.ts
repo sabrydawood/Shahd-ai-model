@@ -93,6 +93,37 @@ test("incremental collect: OnRepoReady stores each repo before the next is downl
   expect(Order).toEqual(["assess:acme/r1", "store:acme/r1", "assess:acme/r2", "store:acme/r2"]);
 });
 
+test("resilient collect: one repo failing (e.g. rate-limit) does not abort the whole run", async () => {
+  // The exact failure mode that silently killed collection: a tarball fetch throwing mid-loop. The
+  // run must log+skip the bad repo and still store the good ones — not abandon everything.
+  const GoodTar = await Tar(["A", "B", "C"].map((N) => ({ name: `ok-sha/src/${N}.ts`, data: Code(N) })));
+  const Http: HttpJson = async () => ({
+    items: [
+      { full_name: "acme/boom", default_branch: "main", license: { spdx_id: "MIT" } },
+      { full_name: "acme/ok", default_branch: "main", license: { spdx_id: "MIT" } },
+    ],
+  });
+  const BytesFetcher: FetchBytes = async (Url) => {
+    if (Url.includes("acme/boom")) throw new Error("GitHub API 403"); // secondary rate limit
+    return GoodTar;
+  };
+  const Reasons: (string | null)[] = [];
+  const Logs: string[] = [];
+  const Provider = CreateGitHubRepoProvider({
+    Http,
+    FetchBytes: BytesFetcher,
+    MinLevel: "medium",
+    OnRepo: (Info) => Reasons.push(Info.Reason ?? null),
+    Log: (M) => Logs.push(M),
+  });
+  const Docs = await Provider.Fetch("q", 5);
+  expect(Docs.length).toBe(3); // the good repo's files survived the bad repo's failure
+  expect(Docs.every((D) => D.Source === "acme/ok")).toBe(true);
+  expect(Reasons.some((R) => R !== null && R.includes("error: GitHub API 403"))).toBe(true); // failure reported, not swallowed
+  expect(Logs.some((L) => L.includes("ERROR acme/boom"))).toBe(true); // and logged to the console trail
+  expect(Logs.some((L) => L.includes("errored=1") && L.includes("stored=1"))).toBe(true); // summary is auditable
+});
+
 test("expanded languages: css/html/vue/sql are recognized as code (M8)", () => {
   expect(IsSubstantiveCodePath("src/styles/main.css")).toBe(true);
   expect(IsSubstantiveCodePath("src/Page.vue")).toBe(true);
