@@ -24,3 +24,21 @@ export type LearnEvent =
   | { kind: "error"; message: string };
 
 export type LearnFn = (Settings: LearnSettings, OnEvent: (Event: LearnEvent) => void) => Promise<void>;
+
+// Model TRAINING (distinct from Learn/data-collection): turn the collected Postgres corpus into a
+// trained model checkpoint. Runs as a subprocess so it never blocks the dashboard event loop.
+export type TrainSettings = {
+  Steps: number;
+  CorpusMb: number;
+  EmbedDim: number;
+  NumLayers: number;
+};
+
+export type TrainEvent =
+  | { kind: "train-start"; steps: number }
+  | { kind: "train-info"; text: string } // corpus / bpe / model setup lines
+  | { kind: "train-progress"; step: number; steps: number; trainLoss: number; valLoss: number }
+  | { kind: "train-done"; savedTo: string }
+  | { kind: "train-error"; message: string };
+
+export type TrainFn = (Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void) => Promise<void>;

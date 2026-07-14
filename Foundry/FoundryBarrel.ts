@@ -12,7 +12,7 @@ export { IngestDocuments, ExportTrainingText } from "./Ingest.ts";
 export type { SourceInput, IngestStats } from "./Ingest.ts";
 export { CreateDashboardHandler, CreateDashboardParts, StartDashboard } from "./Dashboard.ts";
 export type { DashboardHandler, DashboardOptions } from "./Dashboard.ts";
-export type { LearnSettings, LearnEvent, LearnFn } from "./DashboardTypes.ts";
+export type { LearnSettings, LearnEvent, LearnFn, TrainSettings, TrainEvent, TrainFn } from "./DashboardTypes.ts";
 export { GetSystemInfo } from "./SystemInfo.ts";
 export type { SystemInfo } from "./SystemInfo.ts";
 export { DescribeModel } from "./ModelInfo.ts";

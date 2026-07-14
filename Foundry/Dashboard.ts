@@ -13,7 +13,7 @@
 
 import type { Server, ServerWebSocket } from "bun";
 import type { DocumentStore } from "./DocumentStore.ts";
-import type { LearnSettings, LearnEvent, LearnFn } from "./DashboardTypes.ts";
+import type { LearnSettings, LearnEvent, LearnFn, TrainSettings, TrainEvent, TrainFn } from "./DashboardTypes.ts";
 import type { RepoLevel } from "./RepoQuality.ts";
 import type { ChatService } from "./ChatService.ts";
 import type { ModelInfo } from "./ModelInfo.ts";
@@ -22,7 +22,21 @@ import { ChatHtml } from "./ChatHtml.ts";
 import { GetSystemInfo } from "./SystemInfo.ts";
 
 export type DashboardHandler = (Req: Request) => Promise<Response>;
-export type DashboardOptions = { Chat?: ChatService; Model?: ModelInfo | null };
+export type DashboardOptions = {
+  Chat?: ChatService;
+  GetModel?: () => ModelInfo | null; // a getter so the panel reflects a model reloaded after training
+  Train?: TrainFn; // model training (subprocess) — distinct from Learn/data-collection
+  OnTrained?: () => Promise<void>; // reload the freshly-trained checkpoint into the live chat model
+};
+
+function ParseTrainSettings(Body: Record<string, unknown>): TrainSettings {
+  return {
+    Steps: ToNum(Body["Steps"], 500),
+    CorpusMb: ToNum(Body["CorpusMb"], 1.5),
+    EmbedDim: ToNum(Body["EmbedDim"], 96),
+    NumLayers: ToNum(Body["NumLayers"], 3),
+  };
+}
 type WsData = Record<string, never>;
 type Ws = ServerWebSocket<WsData>;
 
@@ -81,6 +95,31 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     return true;
   };
 
+  // Model TRAINING — a separate pipeline stage from Learn/data-collection. On completion the freshly
+  // trained checkpoint is reloaded into the live chat model, and the new model panel is broadcast.
+  const TrainJob: { Running: boolean; Events: TrainEvent[] } = { Running: false, Events: [] };
+  const TrainEmit = (Event: TrainEvent): void => {
+    TrainJob.Events.push(Event); // sparse (one per eval interval) — buffer so reconnects see progress
+    Publish({ type: "train", event: Event });
+    if (Event.kind === "train-done" || Event.kind === "train-error") {
+      TrainJob.Running = false;
+      if (Event.kind === "train-done") {
+        void (async () => {
+          await Options.OnTrained?.(); // swap the new checkpoint into the chat model
+          Publish({ type: "model", data: Options.GetModel?.() ?? null });
+        })();
+      }
+    }
+  };
+  const StartTrain = (Settings: TrainSettings): boolean => {
+    if (Options.Train === undefined || TrainJob.Running) return false;
+    TrainJob.Running = true;
+    TrainJob.Events = [];
+    TrainEmit({ kind: "train-start", steps: Settings.Steps });
+    void Options.Train(Settings, TrainEmit).catch((Caught) => TrainEmit({ kind: "train-error", message: (Caught as Error).message }));
+    return true;
+  };
+
   const Fetch = async (Req: Request): Promise<Response> => {
     const Url = new URL(Req.url);
     const Path = Url.pathname;
@@ -91,8 +130,8 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     if (Path === "/api/stats") return Json(await Store.Stats());
     if (Path === "/api/repos") return Json(await Store.RepoSummaries());
     if (Path === "/api/system") return Json(GetSystemInfo());
-    if (Path === "/api/model") return Json(Options.Model ?? null);
-    if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, chatEnabled: Options.Chat !== undefined, running: Job.Running });
+    if (Path === "/api/model") return Json(Options.GetModel?.() ?? null);
+    if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, trainEnabled: Options.Train !== undefined, chatEnabled: Options.Chat !== undefined, running: Job.Running });
 
     if (Path === "/api/documents") {
       const Source = Url.searchParams.get("source") ?? "";
@@ -173,11 +212,12 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
   // WebSocket: push snapshots on open, stream Learn progress, and stream chat token-by-token.
   const SendSnapshots = (Socket: Ws): void => {
     Socket.send(JSON.stringify({ type: "system", data: GetSystemInfo() }));
-    Socket.send(JSON.stringify({ type: "model", data: Options.Model ?? null }));
+    Socket.send(JSON.stringify({ type: "model", data: Options.GetModel?.() ?? null }));
     void Store.Stats()
       .then((S) => Socket.send(JSON.stringify({ type: "stats", data: S })))
       .catch(() => undefined); // a transient store error must not become an unhandled rejection
     for (const Event of Job.Events) Socket.send(JSON.stringify({ type: "learn", event: Event }));
+    for (const Event of TrainJob.Events) Socket.send(JSON.stringify({ type: "train", event: Event }));
   };
 
   const HandleChat = async (Socket: Ws, Msg: { convId?: string; message?: string; temperature?: number; maxTokens?: number }): Promise<void> => {
@@ -216,6 +256,10 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
       if (Msg.type === "learn") {
         if (!StartLearn(ParseSettings(Msg.settings ?? {}))) {
           Socket.send(JSON.stringify({ type: "learn", event: { kind: "error", message: Learn === undefined ? "no learn runner wired" : "a run is already in progress" } }));
+        }
+      } else if (Msg.type === "train") {
+        if (!StartTrain(ParseTrainSettings(Msg.settings ?? {}))) {
+          Socket.send(JSON.stringify({ type: "train", event: { kind: "train-error", message: Options.Train === undefined ? "training not available" : "a training run is already in progress" } }));
         }
       } else if (Msg.type === "chat") {
         void HandleChat(Socket, Msg as { convId?: string; message?: string; temperature?: number; maxTokens?: number });
