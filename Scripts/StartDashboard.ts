@@ -5,7 +5,7 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, Oasst2Url } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
@@ -177,10 +177,13 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
     OnEvent({ kind: "scanning", label: "downloading " + Repo + "…" });
   };
   const Providers: WebProvider[] = [];
+  // General/text sources: Query is the language filter, MaxRepos is the max items to pull.
   if (Settings.Source === "oasst") {
-    // General/conversation data (OASST — Apache-2.0, multilingual): Query is the language filter,
-    // MaxRepos is the max number of conversations to pull.
     Providers.push(CreateOasstProvider({ OnRepoStart, OnRepoReady }));
+  } else if (Settings.Source === "oasst2") {
+    Providers.push(CreateOasstProvider({ Url: Oasst2Url, OnRepoStart, OnRepoReady }));
+  } else if (Settings.Source === "wikipedia") {
+    Providers.push(CreateWikipediaProvider({ OnRepoStart, OnRepoReady }));
   } else {
     if (Settings.Source !== "local") {
       Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));

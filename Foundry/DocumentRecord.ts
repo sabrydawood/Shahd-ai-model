@@ -8,8 +8,10 @@
 export type Tier = "Filtered" | "Raw" | "Rejected";
 
 // Where a document came from — decides tiering. "owned" = our own repos (trained on regardless of
-// license, no third-party risk); "web-general" is always isolated to Raw.
-export type Origin = "owned" | "local" | "web-permissive" | "web-general";
+// license, no third-party risk); "curated" = a general/text dataset we explicitly vetted and approved
+// as a whole (OASST, Wikipedia, public-domain books) — its single source-level license is recorded for
+// provenance but not re-checked per document; "web-general" is always isolated to Raw.
+export type Origin = "owned" | "local" | "web-permissive" | "web-general" | "curated";
 
 export type DocumentRecord = {
   Id: string; // stable id = content hash

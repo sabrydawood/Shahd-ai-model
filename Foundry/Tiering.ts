@@ -16,8 +16,10 @@ export function ClassifyDocument(License: string, Content: string, Origin: Origi
   if (Origin === "web-general") {
     return { Tier: "Raw", QualityScore: Quality.Score, RejectReason: "general web: isolated for inspection, not training-eligible" };
   }
-  if (Origin === "owned") {
-    // Our own code — no third-party licensing risk; keep it if the quality gate passes.
+  if (Origin === "owned" || Origin === "curated") {
+    // Our own code (owned) or a whole dataset we explicitly vetted + approved (curated: OASST /
+    // Wikipedia / public-domain books). The source-level license is already accepted, so it is not
+    // re-checked per document (License is still recorded on the record for provenance) — only quality.
     if (!Quality.Passed) return { Tier: "Rejected", QualityScore: Quality.Score, RejectReason: `low quality: ${Quality.Reasons.join("; ")}` };
     return { Tier: "Filtered", QualityScore: Quality.Score, RejectReason: null };
   }

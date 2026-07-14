@@ -32,7 +32,7 @@ test("OASST provider extracts prompter->assistant conversations as permissive do
   expect(Batches.length).toBe(2); // en + ar exchanges
   const En = Batches.find((D) => D.Lang === "text-en")!;
   expect(En.Content).toBe("User: Hello\n\nAssistant: Hi there!");
-  expect(En).toMatchObject({ License: "Apache-2.0", Origin: "web-permissive" });
+  expect(En).toMatchObject({ License: "Apache-2.0", Origin: "curated" });
   expect(Batches.find((D) => D.Lang === "text-ar")!.Content).toContain("القاهرة");
 });
 

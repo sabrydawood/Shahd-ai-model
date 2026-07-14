@@ -9,7 +9,9 @@ import { gunzipSync } from "node:zlib";
 import type { WebProvider, RepoSink } from "./WebSource.ts";
 import type { SourceInput } from "./Ingest.ts";
 
-const DefaultUrl = "https://huggingface.co/datasets/OpenAssistant/oasst1/resolve/main/2023-04-12_oasst_ready.trees.jsonl.gz";
+export const Oasst1Url = "https://huggingface.co/datasets/OpenAssistant/oasst1/resolve/main/2023-04-12_oasst_ready.trees.jsonl.gz";
+export const Oasst2Url = "https://huggingface.co/datasets/OpenAssistant/oasst2/resolve/main/2023-11-05_oasst2_ready.trees.jsonl.gz";
+const DefaultUrl = Oasst1Url;
 
 export type OasstOptions = {
   Url?: string;
@@ -45,7 +47,7 @@ function Extract(Node: OasstNode | undefined, LangFilter: string, Limit: number,
       Lang: `text-${Lang}`,
       Content: `User: ${Node.text}\n\nAssistant: ${Assistant.text}`,
       Provenance: `oasst:${Node.message_id ?? "?"}`,
-      Origin: "web-permissive",
+      Origin: "curated", // a whole dataset we vetted (Apache-2.0) — quality-gated, license recorded not re-checked
     });
   }
   for (const Next of Assistant.replies ?? []) Extract(Next, LangFilter, Limit, Out); // deeper turns
