@@ -255,8 +255,8 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
     `--Block=${Settings.BlockSize}`, `--Batch=${Settings.BatchSize}`,
   ];
   const Args = Settings.Kind === "chat"
-    ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common]
-    : ["bun", "run", "Scripts/TrainOnFoundry.ts", ...Common, `--CorpusMb=${Settings.CorpusMb}`];
+    ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common, `--CodeSamples=${Settings.CodeSamples}`, `--ConvCount=${Settings.ConvCount}`]
+    : ["bun", "run", "Scripts/TrainOnFoundry.ts", ...Common, `--CorpusMb=${Settings.CorpusMb}`, `--KnowledgeMb=${Settings.KnowledgeMb}`];
   console.log(`[train] ${Settings.Kind} "${Settings.Name}": ${Settings.Steps} steps`);
   const Proc = Bun.spawn(Args, { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
   const OnAbort = (): void => {
@@ -302,6 +302,7 @@ StartDashboard(InspectStore, Port, Learn, {
   OnTrained: (Name: string) => ReloadModel(Name),
   Checkpoints: ListCheckpoints,
   LoadModel: (Name: string) => ReloadModel(Name),
+  KindStats: () => (Stores !== null ? Stores.Stats() : Promise.resolve([])),
 });
 console.log(`Foundry control panel: http://localhost:${Port}  (store=${Stores !== null ? "postgres/per-kind" : "memory"}, ${await InspectStore.Count()} code docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
 console.log(`  chat model: ${ModelHolder.Source} (memory: ${DbUrl ? "postgres" : "in-memory"})`);

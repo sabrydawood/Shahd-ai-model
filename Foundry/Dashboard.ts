@@ -14,6 +14,7 @@
 import type { Server, ServerWebSocket } from "bun";
 import type { DocumentStore } from "./DocumentStore.ts";
 import type { LearnSettings, LearnEvent, LearnFn, TrainSettings, TrainEvent, TrainFn } from "./DashboardTypes.ts";
+import type { KindStat } from "./FoundryStores.ts";
 import type { RepoLevel } from "./RepoQuality.ts";
 import type { ChatService } from "./ChatService.ts";
 import type { ModelInfo } from "./ModelInfo.ts";
@@ -31,6 +32,7 @@ export type DashboardOptions = {
   OnTrained?: (Name: string) => Promise<void>; // load the freshly-trained checkpoint into the chat model
   Checkpoints?: () => Promise<CheckpointSummary[]>; // list saved models (the chat-model picker)
   LoadModel?: (Name: string) => Promise<void>; // switch the chat model to a saved checkpoint
+  KindStats?: () => Promise<KindStat[]>; // per-kind document counts/bytes (the data-separation breakdown)
 };
 
 function SafeName(Value: unknown): string {
@@ -51,6 +53,9 @@ function ParseTrainSettings(Body: Record<string, unknown>): TrainSettings {
     BlockSize: ToNum(Body["BlockSize"], 96),
     Merges: ToNum(Body["Merges"], 256),
     BatchSize: ToNum(Body["BatchSize"], 16),
+    KnowledgeMb: ToNum(Body["KnowledgeMb"], 0),
+    ConvCount: ToNum(Body["ConvCount"], 4000),
+    CodeSamples: ToNum(Body["CodeSamples"], 4000),
   };
 }
 type WsData = Record<string, never>;
@@ -162,6 +167,7 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     if (Path === "/api/system") return Json(GetSystemInfo());
     if (Path === "/api/model") return Json(Options.GetModel?.() ?? null);
     if (Path === "/api/checkpoints") return Json((await Options.Checkpoints?.()) ?? []);
+    if (Path === "/api/kinds") return Json((await Options.KindStats?.()) ?? []);
     if (Path === "/api/config") return Json({ learnEnabled: Learn !== undefined, trainEnabled: Options.Train !== undefined, chatEnabled: Options.Chat !== undefined, running: Job.Running });
 
     if (Path === "/api/documents") {

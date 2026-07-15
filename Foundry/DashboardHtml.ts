@@ -68,6 +68,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  <div class="pipes">
   <div class="panel stage">
    <h2>① Collect Data <span class="badge" id="cbadge">idle</span></h2>
+   <div id="kinds" style="margin-bottom:8px;color:var(--mut);font-size:13px"></div>
    <label>Source</label>
    <select id="source"><option value="github">Public GitHub repos</option><option value="local">Our own repos (local)</option><option value="both">Both</option><option value="oasst">OASST conversations (Apache-2.0)</option><option value="oasst2">OASST2 conversations (Apache-2.0, more)</option><option value="wikipedia">Wikipedia articles (CC-BY-SA)</option></select>
    <div class="hint">For OASST/OASST2/Wikipedia: put a language in <b>Query</b> (<code>all</code>, <code>en</code>, <code>ar</code>…) and the item count in <b>Max repos</b>.</div>
@@ -89,7 +90,9 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
    <label>Model name <span style="color:var(--mut)">— train/keep several side by side</span></label><input id="tname" value="foundry">
    <div class="row"><div><label>Embed dim</label><input id="tembed" type="number" value="96"></div><div><label>Layers</label><input id="tlayers" type="number" value="3"></div><div><label>Heads</label><input id="theads" type="number" value="4"></div></div>
    <div class="row"><div><label>Context</label><input id="tctx" type="number" value="96"></div><div><label>Vocab</label><input id="tvocab" type="number" value="512"></div><div><label>Batch</label><input id="tbatch" type="number" value="16"></div></div>
-   <div class="row"><div><label>Steps</label><input id="tsteps" type="number" value="500"></div><div><label>Corpus MB</label><input id="tcorpus" type="number" step="0.5" value="1.5"></div></div>
+   <div class="row"><div><label>Steps</label><input id="tsteps" type="number" value="500"></div><div><label>Code MB (Corpus)</label><input id="tcorpus" type="number" step="0.5" value="1.5"></div></div>
+   <label>Data mix per kind <span style="color:var(--mut)">— set 0 to exclude a kind</span></label>
+   <div class="row"><div><label>Knowledge MB (pretrain)</label><input id="tknow" type="number" step="1" value="0"></div><div><label>Conversations (chat)</label><input id="tconv" type="number" value="4000"></div><div><label>Code samples (chat)</label><input id="tcode" type="number" value="4000"></div></div>
    <button class="train" id="tgo" onclick="tbtn()">▶ Train Model</button>
    <div class="hint">Trains a byte-level model on the collected corpus, then loads it into Chat. Heads must divide Embed. Re-running the same name resumes; a new name trains a separate model. See Docs/MODEL-SCALING.md for tier presets.</div>
    <div class="plabel" style="margin-top:11px"><span id="tstep">step</span><span id="tloss"></span></div>
@@ -110,7 +113,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
  var badge=function(id,txt,cls){var b=Q(id);b.textContent=txt;b.className='badge'+(cls?' '+cls:'');};
  var logLine=function(el,t,c){var d=document.createElement('div');if(c)d.className=c;d.innerHTML='<span class="t">'+new Date().toTimeString().slice(0,8)+'</span>  '+H(t);el.appendChild(d);el.scrollTop=el.scrollHeight;};
  Q('source').onchange=function(e){var v=e.target.value;Q('ghbox').style.display=v==='local'?'none':'';Q('localbox').style.display=v==='github'?'none':'';};
- var FIELDS=['source','query','repos','minlevel','maxrepos','maxfiles','maxmb','maxkb','skip','tkind','tname','tsteps','tcorpus','tembed','tlayers','theads','tctx','tvocab','tbatch'];
+ var FIELDS=['source','query','repos','minlevel','maxrepos','maxfiles','maxmb','maxkb','skip','tkind','tname','tsteps','tcorpus','tembed','tlayers','theads','tctx','tvocab','tbatch','tknow','tconv','tcode'];
  function saveSettings(){var o={};FIELDS.forEach(function(id){var el=Q(id);o[id]=el.type==='checkbox'?el.checked:el.value;});try{localStorage.setItem('shahd.cfg',JSON.stringify(o));}catch(e){}}
  function restoreSettings(){try{var o=JSON.parse(localStorage.getItem('shahd.cfg')||'{}');FIELDS.forEach(function(id){if(o[id]===undefined)return;var el=Q(id);if(el.type==='checkbox')el.checked=!!o[id];else el.value=o[id];});Q('source').dispatchEvent(new Event('change'));}catch(e){}}
 
@@ -149,7 +152,7 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
   else if(e.kind==='scanning'){Q('crepo').innerHTML='<span class="spin">⏳</span> '+H(e.label);Q('crlab').textContent='working…';Q('crfill').className='pfill rp busy';logLine(log,'⏳ '+e.label,'skip');}
   else if(e.kind==='repo'){seen++;if(e.ingested){ing++;files+=e.files;}else{skp++;}logLine(log,(e.ingested?'✓ ':'· ')+e.repo+' ['+e.level+', '+e.files+' files]'+(e.ingested?' INGESTED':' skipped'+(e.reason?' ('+e.reason+')':'')),e.ingested?'ok':'skip');setCol(seen/maxRepos,seen+' / '+maxRepos+' · '+ing+' new · '+skp+' skipped');}
   else if(e.kind==='repo-progress'){setCrepo(e.filesTotal?e.filesDone/e.filesTotal:0,'ingesting '+e.repo,e.filesDone+' / '+e.filesTotal+' files');}
-  else if(e.kind==='done'){collecting=false;setBtn('cgo','idle');badge('cbadge',e.ingested?'done':'0 new','ok');setCol(1,ing+' new · '+skp+' skipped · '+e.ingested+' files');setCrepo(1,'current repo','complete');logLine(log,'done — '+e.ingested+' files from '+ing+' repos ('+skp+' skipped)',e.ingested?'ok':'skip');if(e.ingested===0)logLine(log,'⚠ 0 new: all matching repos already collected. Try a different query or uncheck Skip.','skip');loadRepos();}
+  else if(e.kind==='done'){collecting=false;setBtn('cgo','idle');badge('cbadge',e.ingested?'done':'0 new','ok');setCol(1,ing+' new · '+skp+' skipped · '+e.ingested+' files');setCrepo(1,'current repo','complete');logLine(log,'done — '+e.ingested+' files from '+ing+' repos ('+skp+' skipped)',e.ingested?'ok':'skip');if(e.ingested===0)logLine(log,'⚠ 0 new: all matching repos already collected. Try a different query or uncheck Skip.','skip');loadRepos();loadKinds();}
   else if(e.kind==='error'){collecting=false;setBtn('cgo','idle');badge('cbadge','error','err');logLine(log,'error: '+e.message,'err');}
  }
  function collect(){saveSettings();maxRepos=+Q('maxrepos').value||1;var s={Source:Q('source').value,Query:Q('query').value,Repos:Q('repos').value.split(',').map(function(x){return x.trim();}).filter(Boolean),MinLevel:Q('minlevel').value,MaxRepos:maxRepos,MaxFilesPerRepo:+Q('maxfiles').value,MaxBytesPerRepo:(+Q('maxmb').value)*1e6,MaxContentBytes:(+Q('maxkb').value)*1e3,SkipLearned:Q('skip').checked};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'learn',settings:s}));else logLine(Q('clog'),'not connected','err');}
@@ -172,13 +175,15 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
   else if(e.kind==='train-done'){training=false;setBtn('tgo','idle');badge('tbadge','done','ok');setTrain(1,'complete',Q('tloss').textContent);logLine(log,'✓ trained + saved to '+e.savedTo+' — model reloaded into Chat','ok');}
   else if(e.kind==='train-error'){training=false;setBtn('tgo','idle');var stopped=e.message.indexOf('stop')>=0;badge('tbadge',stopped?'stopped':'error',stopped?'skip':'err');logLine(log,(stopped?'■ ':'error: ')+e.message,stopped?'skip':'err');}
  }
- function train(){saveSettings();var s={Kind:Q('tkind').value,Name:Q('tname').value,Steps:+Q('tsteps').value,CorpusMb:+Q('tcorpus').value,EmbedDim:+Q('tembed').value,NumLayers:+Q('tlayers').value,NumHeads:+Q('theads').value,BlockSize:+Q('tctx').value,Merges:Math.max(0,(+Q('tvocab').value)-256),BatchSize:+Q('tbatch').value};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'train',settings:s}));else logLine(Q('tlog'),'not connected','err');}
+ function train(){saveSettings();var s={Kind:Q('tkind').value,Name:Q('tname').value,Steps:+Q('tsteps').value,CorpusMb:+Q('tcorpus').value,EmbedDim:+Q('tembed').value,NumLayers:+Q('tlayers').value,NumHeads:+Q('theads').value,BlockSize:+Q('tctx').value,Merges:Math.max(0,(+Q('tvocab').value)-256),BatchSize:+Q('tbatch').value,KnowledgeMb:+Q('tknow').value,ConvCount:+Q('tconv').value,CodeSamples:+Q('tcode').value};if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'train',settings:s}));else logLine(Q('tlog'),'not connected','err');}
  // ── chat-model picker ──
  var loadedName='';
  function renderCheckpoints(list){if(!list||!list.length){Q('ckptsel').innerHTML='';return;}var opts=list.map(function(c){return '<option value="'+H(c.Name)+'"'+(c.Name===loadedName?' selected':'')+'>'+H(c.Name)+' — '+fmtN(c.Params)+'p · '+H(c.Arch)+'</option>';}).join('');Q('ckptsel').innerHTML='<label style="margin:0 0 3px">chat model ('+list.length+' saved — pick to switch)</label><select id="ckptdd" onchange="loadModel(this.value)" style="margin-bottom:9px">'+opts+'</select>';}
  function syncCkptSel(){var dd=Q('ckptdd');if(dd&&loadedName)dd.value=loadedName;}
  function loadModel(name){if(WS&&WS.readyState===1)WS.send(JSON.stringify({type:'load-model',name:name}));}
 
+ // ── data-by-kind breakdown (physically-separate tables) ──
+ async function loadKinds(){try{var k=await (await fetch('/api/kinds')).json();var parts=k.filter(function(x){return x.Count>0;}).map(function(x){return x.Kind+': '+x.Count.toLocaleString()+' ('+fmtB(x.FilteredBytes)+' filtered)';});Q('kinds').textContent=parts.length?('Data by kind — '+parts.join('  ·  ')):'';}catch(e){}}
  // ── repos + file viewer ──
  async function loadRepos(){var r=await (await fetch('/api/repos')).json();Q('repos-list').innerHTML=r.length?r.map(function(x){return '<div class="acc"><div class="h" onclick="openRepo(this,'+JSON.stringify(H(x.Source)).replace(/"/g,'&quot;')+')"><span>'+H(x.Source)+'</span><span class="r">'+x.Files+' files · '+fmtB(x.Bytes)+'</span></div><div class="b"></div></div>';}).join(''):'<div style="color:var(--mut)">nothing collected yet.</div>';}
  async function openRepo(h,src){var acc=h.parentElement,body=acc.querySelector('.b');if(acc.classList.contains('open')){acc.classList.remove('open');return;}acc.classList.add('open');if(body.dataset.loaded)return;body.dataset.loaded='1';var d=await (await fetch('/api/documents?source='+encodeURIComponent(src)+'&limit=2000')).json();body.innerHTML='<table>'+d.map(function(f){return '<tr onclick="openFile('+JSON.stringify(f.id).replace(/"/g,'&quot;')+','+JSON.stringify(H(f.path||f.provenance)).replace(/"/g,'&quot;')+')"><td class="tier-'+f.tier+'">'+H(f.path||f.provenance)+'</td><td class="mut">'+H(f.lang)+' · '+fmtB(f.bytes)+'</td></tr>';}).join('')+'</table>';}
@@ -200,5 +205,5 @@ export const DashboardHtml = `<!doctype html><html><head><meta charset="utf-8"><
    else if(m.type==='train')onTrain(m.event);
   };
  }
- restoreSettings();connect();loadRepos();
+ restoreSettings();connect();loadRepos();loadKinds();
 </script></body></html>`;

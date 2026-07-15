@@ -39,6 +39,11 @@ export type TrainSettings = {
   BlockSize: number;
   Merges: number; // vocab = 256 + Merges
   BatchSize: number;
+  // Per-kind data amounts (the mix): pretrain reads CorpusMb of code + KnowledgeMb of knowledge; chat
+  // SFT reads CodeSamples code docs + ConvCount real dialogues. Set any to 0 for a pure-kind model.
+  KnowledgeMb: number;
+  ConvCount: number;
+  CodeSamples: number;
 };
 
 export type TrainEvent =
