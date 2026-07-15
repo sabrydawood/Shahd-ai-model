@@ -70,10 +70,13 @@ const CkptName = ReadArg("--Name=", "foundry");
 const DbUrl = process.env["DATABASE_URL"];
 const CkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckpointStore(DbUrl) : null;
 const Fresh = ReadFlag("--Fresh");
+const ResumeFlag = ReadFlag("--Resume"); // explicit "train it more" — extend even past the old MaxSteps
 
 // RESUME: if a checkpoint of the same name + matching architecture exists (e.g. a stopped or crashed
 // run), continue from where it left off — reuse its tokenizer, weights, optimizer, and RNG. Otherwise
 // start fresh. This is what makes a long run crash-safe together with the periodic saves below.
+// Auto-resumes a same-name/same-Steps run (crash recovery); with --Resume it also EXTENDS a finished
+// model to a higher Steps (the dashboard "Resume training" flow) instead of retraining fresh.
 type BpeTokenizerState = { Kind: string; Merges: [number, number][] };
 let Resume: { Ckpt: Checkpoint; Step: number; Merges: [number, number][] } | null = null;
 if (CkptStore !== null && !Measure && !Fresh) {
@@ -81,7 +84,8 @@ if (CkptStore !== null && !Measure && !Fresh) {
   const State = (Existing?.TokenizerState ?? null) as BpeTokenizerState | null;
   if (Existing !== null && State !== null && State.Kind === "Bpe" && Array.isArray(State.Merges)) {
     const M = Existing.Config.Model;
-    const Match = M.EmbedDim === EmbedDim && M.NumLayers === NumLayers && M.BlockSize === BlockSize && Existing.Config.Schedule.MaxSteps === EffectiveSteps;
+    const ArchMatch = M.EmbedDim === EmbedDim && M.NumLayers === NumLayers && M.NumHeads === NumHeads && M.BlockSize === BlockSize;
+    const Match = ArchMatch && (ResumeFlag || Existing.Config.Schedule.MaxSteps === EffectiveSteps);
     const DoneStep = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
     if (Match && DoneStep < EffectiveSteps) Resume = { Ckpt: Existing, Step: DoneStep, Merges: State.Merges };
   }

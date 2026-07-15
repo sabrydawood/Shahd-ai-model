@@ -3,7 +3,7 @@
 // live database. Dedup is by Id (content hash); FindSimilar is a linear cosine scan (fine at this
 // scale — pgvector handles scale in the Postgres implementation).
 
-import type { DocumentStore, SimilarHit, RepoSummary, FoundryStats } from "./DocumentStore.ts";
+import type { DocumentStore, SimilarHit, RepoSummary, FoundryStats, DocumentFilter, DocumentPage } from "./DocumentStore.ts";
 import type { DocumentRecord, Tier } from "./DocumentRecord.ts";
 import { CosineSimilarity } from "./Embedding.ts";
 
@@ -55,6 +55,35 @@ export class InMemoryDocumentStore implements DocumentStore {
 
   async DocumentById(Id: string): Promise<DocumentRecord | null> {
     return this.Docs.get(Id) ?? null;
+  }
+
+  private Matches(Doc: DocumentRecord, Filter: DocumentFilter): boolean {
+    if (Filter.Tier && Doc.Tier !== Filter.Tier) return false;
+    if (Filter.Lang && Doc.Lang !== Filter.Lang) return false;
+    if (Filter.License && Doc.License !== Filter.License) return false;
+    const Search = Filter.Search?.trim().toLowerCase();
+    if (Search) return Doc.Provenance.toLowerCase().includes(Search) || Doc.Content.toLowerCase().includes(Search);
+    return true;
+  }
+
+  async Query(Filter: DocumentFilter, Offset: number, Limit: number): Promise<DocumentPage> {
+    const Matching = [...this.Docs.values()].filter((D) => this.Matches(D, Filter)).sort((A, B) => B.IngestedAt.localeCompare(A.IngestedAt));
+    return { Rows: Matching.slice(Offset, Offset + Limit), Total: Matching.length };
+  }
+
+  async DeleteById(Id: string): Promise<number> {
+    return this.Docs.delete(Id) ? 1 : 0;
+  }
+
+  async DeleteMatching(Filter: DocumentFilter): Promise<number> {
+    let N = 0;
+    for (const [Id, Doc] of [...this.Docs.entries()]) {
+      if (this.Matches(Doc, Filter)) {
+        this.Docs.delete(Id);
+        N++;
+      }
+    }
+    return N;
   }
 
   async ReclassifyBySource(Source: string, NewLicense: string, MinQuality: number): Promise<{ Promoted: number; KeptLowQuality: number }> {

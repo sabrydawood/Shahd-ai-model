@@ -1,0 +1,263 @@
+// Control-plane client logic (M14 rebuild). One WebSocket (/ws) for realtime system/model/stats/learn/
+// train + load-model; REST for /api/kinds, /api/checkpoints, /api/browse* , /api/system, /api/model.
+// Six views (Overview/Collect/Data/Train/Models/System) switched by a hash router; Chat is the
+// dedicated /chat page (linked). IMPORTANT: this is inlined into a backtick template in
+// DashboardHtml.ts — it MUST stay free of backticks, ${ ... } and the closing script sequence; all
+// strings use single quotes + concatenation. Kept in its own file so each file stays small.
+export const DashboardScript = `
+ var H=function(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});};
+ var Q=function(id){return document.getElementById(id);};
+ var fmtN=function(n){return (Number(n)||0).toLocaleString();};
+ var fmtB=function(n){n=Number(n)||0;return n>=1e9?(n/1e9).toFixed(2)+' GB':n>=1e6?(n/1e6).toFixed(1)+' MB':n>=1e3?(n/1e3).toFixed(0)+' KB':n+' B';};
+ var fmtP=function(n){n=Number(n)||0;return n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':String(n);};
+ var fmtDur=function(ms){var s=Math.round(ms/1000);if(s<90)return s+'s';var m=Math.round(s/60);if(m<90)return m+'m';var h=m/60;return h<48?h.toFixed(1)+'h':(h/24).toFixed(1)+'d';};
+ var logLine=function(el,txt,cls){if(!el)return;var d=document.createElement('div');if(cls)d.className=cls;d.textContent='['+new Date().toTimeString().slice(0,8)+'] '+txt;el.appendChild(d);el.scrollTop=el.scrollHeight;};
+ var pillKind=function(k){return '<span class="pill '+H(k)+'">'+H(k)+'</span>';};
+
+ var WS=null, loadedName='', collecting=false, training=false, checkpoints=[], kindStats=[], lastSystem=null, lossHistory=[], trainStart=0;
+ var chConv=null, chStreaming=false, chBubble=null;
+ var LANGS={oasst:[['all','All languages'],['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['zh','Chinese']],
+            wiki:[['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['ja','Japanese']]};
+ // MODEL-SCALING §1 presets: Embed, Layers, Heads, Context, Vocab, Batch, Steps.
+ var PRESETS={Seed:[96,3,4,96,512,16,6000],Nano:[128,4,4,256,512,16,5000],Micro:[256,6,4,512,1024,16,16000],Mini:[512,8,8,1024,4096,32,22000],Small:[768,12,12,2048,16384,64,19000],Base:[1024,24,16,4096,32000,128,17000],Large:[2048,32,32,8192,50000,256,22000]};
+
+ // ── theme ──
+ function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('shahd.theme',t);}catch(e){}Q('themebtn').textContent=t==='dark'?'☀':'☾';}
+ function toggleTheme(){var cur=document.documentElement.getAttribute('data-theme');applyTheme(cur==='dark'?'light':'dark');}
+
+ // ── nav / router ──
+ var TITLES={overview:['Overview','everything at a glance'],collect:['Collect data','sources land in per-kind tables'],data:['Data browser','review + clean the collected corpus'],train:['Train','new model, or resume a saved one'],models:['Models','load · add training · delete'],chat:['Chat','test the model + see its reasoning'],system:['System','host + compute']};
+ function navTo(v){if(!TITLES[v])v='overview';
+  var links=document.querySelectorAll('.nav a[data-v]');for(var i=0;i<links.length;i++)links[i].classList.toggle('on',links[i].getAttribute('data-v')===v);
+  var views=document.querySelectorAll('.view');for(var j=0;j<views.length;j++)views[j].classList.remove('on');
+  var el=Q('view-'+v);if(el)el.classList.add('on');
+  Q('vtitle').textContent=TITLES[v][0];Q('vcrumb').textContent=TITLES[v][1];
+  Q('side').classList.remove('open');window.scrollTo(0,0);
+  if(v==='data')dLoad();else if(v==='models')loadCheckpoints();else if(v==='overview')loadOverview();else if(v==='system')renderSystem(lastSystem);else if(v==='chat')chInit();
+ }
+ window.addEventListener('hashchange',function(){navTo((location.hash||'#overview').slice(1));});
+
+ // ── Overview ──
+ async function loadOverview(){try{kindStats=await (await fetch('/api/kinds')).json();}catch(e){kindStats=[];}renderKinds();
+  try{var m=await (await fetch('/api/model')).json();renderModelCard(m);}catch(e){}}
+ function renderKinds(){
+  var totalDocs=0,trainable=0;kindStats.forEach(function(k){totalDocs+=k.Count;trainable+=k.Filtered;});
+  Q('ov-docs').textContent=fmtN(totalDocs);
+  Q('ov-trainable').textContent=fmtN(trainable);
+  var active=kindStats.filter(function(k){return k.Count>0;}).length;
+  Q('ov-docs-s').textContent='across '+active+' active kind'+(active===1?'':'s');
+  var maxCount=1;kindStats.forEach(function(k){if(k.Count>maxCount)maxCount=k.Count;});
+  var COLOR={code:'var(--code)',conversation:'var(--conv)',knowledge:'var(--know)',books:'var(--books)',web:'var(--mut)',instruction:'var(--mut)'};
+  Q('ov-kinds').innerHTML=kindStats.map(function(k){var off=k.Count===0;var c=COLOR[k.Kind]||'var(--mut)';
+   var amt=off?'reserved':fmtN(k.Count)+' · '+fmtB(k.FilteredBytes)+' filtered';
+   return '<div class="kind'+(off?' off':'')+'"><div class="nm"><span class="sw" style="background:'+c+'"></span>'+H(k.Kind)+'</div><div class="track"><div class="fill" style="width:'+Math.max(off?0:2,(k.Count/maxCount)*100)+'%;background:'+c+'"></div></div><div class="amt tnum">'+H(amt)+'</div></div>';}).join('');
+ }
+ function renderModelCard(m){
+  Q('ov-models').textContent=fmtN(checkpoints.length);
+  var chat=checkpoints.filter(function(c){return c.Format==='chat';}).length;
+  Q('ov-models-s').textContent=(checkpoints.length-chat)+' base · '+chat+' chat';
+  if(!m){Q('ov-model').innerHTML='<div class="empty">no model loaded — train one, then load it</div>';return;}
+  Q('ov-model').innerHTML='<div style="font-family:var(--mono);font-size:20px;font-weight:680">'+H(loadedName||'model')+'</div>'
+   +'<div style="color:var(--mut);font-size:12.5px;margin:3px 0 14px">'+fmtN(m.TotalParams)+' params · emb'+m.EmbedDim+' · L'+m.NumLayers+' · ctx'+m.BlockSize+'</div>'
+   +'<div class="row c2"><div><div class="k" style="font-size:11px;color:var(--mut)">VOCAB</div><div class="mono" style="font-size:15px">'+fmtN(m.VocabSize)+'</div></div>'
+   +'<div><div class="k" style="font-size:11px;color:var(--mut)">POSITION / NORM</div><div class="mono" style="font-size:15px">'+H(m.PositionScheme)+' / '+H(m.NormKind)+'</div></div></div>'
+   +'<div style="display:flex;gap:8px;margin-top:16px"><button class="btn pri sm" onclick="location.href=\\'/chat\\'">Open in Chat</button></div>';
+ }
+ function setJobs(){var t=collecting?'Collecting':training?'Training':'Idle';Q('ov-jobs').textContent=t;Q('ov-jobs-s').textContent=(collecting||training)?'run in progress':'no run in progress';}
+
+ // ── Collect ──
+ var SRC='github';
+ function pickSource(s){SRC=s;var cards=document.querySelectorAll('#srccards .s');for(var i=0;i<cards.length;i++)cards[i].classList.toggle('on',cards[i].getAttribute('data-src')===s);syncCollectForm();}
+ function syncCollectForm(){
+  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia');
+  Q('c-ghbox').style.display=(SRC==='github'||SRC==='both')?'':'none';
+  Q('c-localbox').style.display=(SRC==='local'||SRC==='both')?'':'none';
+  Q('c-levelbox').style.display=general?'none':'';
+  Q('c-capbox').style.display=general?'none':'';
+  Q('c-genbox').style.display=general?'':'none';
+  Q('c-maxlabel').textContent=general?'Max items':'Max repos';
+  if(general){var opts=SRC==='wikipedia'?LANGS.wiki:LANGS.oasst;Q('c-lang').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('');}
+  var kind=SRC==='wikipedia'?'knowledge':(SRC==='oasst'||SRC==='oasst2')?'conversation':'code';
+  Q('c-kindhint').innerHTML='This source is stored in '+pillKind(kind)+' &nbsp;<span style="color:var(--faint)">documents_'+kind+'</span>';
+ }
+ function collectSettings(){
+  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia');
+  var query=general?Q('c-lang').value:Q('c-query').value;
+  return {Source:SRC,Query:query,Repos:Q('c-repos').value.split(',').map(function(x){return x.trim();}).filter(Boolean),
+   MinLevel:Q('c-minlevel').value,MaxRepos:+Q('c-maxrepos').value||1,MaxFilesPerRepo:+Q('c-maxfiles').value,
+   MaxBytesPerRepo:(+Q('c-maxmb').value)*1e6,MaxContentBytes:(+Q('c-maxkb').value)*1e3,SkipLearned:Q('c-skip').checked};
+ }
+ function cStart(){if(!wsReady())return;save();WS.send(JSON.stringify({type:'learn',settings:collectSettings()}));}
+ function cStop(){if(wsReady()){WS.send(JSON.stringify({type:'learn-stop'}));Q('c-start').textContent='stopping…';Q('c-start').disabled=true;}}
+ function setCollectBtn(run){collecting=run;setJobs();var b=Q('c-start');b.disabled=false;b.textContent=run?'■ Stop':'▶ Start collection';b.className='btn '+(run?'danger':'pri');b.onclick=run?cStop:cStart;Q('c-stop').style.display='none';}
+ var cMax=5,cSeen=0,cNew=0,cSkip=0;
+ function cProg(f,busy,label){var p=Q('c-prog');p.className='prog'+(busy?' busy':'');Q('c-progi').style.width=Math.max(0,Math.min(1,f))*100+'%';Q('c-plabel').textContent=label;}
+ function onLearn(e){var log=Q('c-log');
+  if(e.kind==='start'){cMax=e.repos||5;cSeen=0;cNew=0;cSkip=0;setCollectBtn(true);Q('c-badge').className='pill run';Q('c-badge').textContent='collecting';log.innerHTML='';logLine(log,'collecting from '+e.source+' ('+(e.query||'own repos')+')','a');cProg(.02,false,'0 / '+cMax);}
+  else if(e.kind==='scanning'){cProg(1,true,e.label);logLine(log,e.label,'a');}
+  else if(e.kind==='repo'){cSeen++;if(e.ingested)cNew++;else cSkip++;logLine(log,(e.ingested?'stored ':'skip ')+e.repo+' ['+e.level+', '+e.files+' files]'+(e.ingested?'':(e.reason?' ('+e.reason+')':'')),e.ingested?'ok':'');cProg(cSeen/cMax,false,cSeen+' / '+cMax+' · '+cNew+' new · '+cSkip+' skipped');}
+  else if(e.kind==='repo-progress'){cProg(e.filesTotal?e.filesDone/e.filesTotal:0,false,'ingesting '+e.repo+' — '+e.filesDone+' / '+e.filesTotal+' files');}
+  else if(e.kind==='done'){setCollectBtn(false);Q('c-badge').className='pill done';Q('c-badge').textContent='done';cProg(1,false,cNew+' new · '+cSkip+' skipped · '+e.ingested+' files');logLine(log,'done — '+e.ingested+' files from '+cNew+' sources ('+cSkip+' skipped)',e.ingested?'ok':'w');if(e.ingested===0)logLine(log,'0 new: everything matched is already collected — change the query or uncheck Skip.','w');loadOverview();}
+  else if(e.kind==='error'){setCollectBtn(false);Q('c-badge').className='pill err';Q('c-badge').textContent='error';logLine(log,'error: '+e.message,'e');}
+ }
+
+ // ── Data browser ──
+ var dPage=0,dTotal=0,dSize=50;
+ async function dFacets(){try{var f=await (await fetch('/api/browse/facets?kind='+encodeURIComponent(Q('d-kind').value))).json();
+   var langOpt='<option value="">any language</option>'+(f.Langs||[]).map(function(l){return '<option value="'+H(l)+'">'+H(l)+'</option>';}).join('');
+   var licOpt='<option value="">any license</option>'+(f.Licenses||[]).map(function(l){return '<option value="'+H(l)+'">'+H(l)+'</option>';}).join('');
+   var kl=Q('d-lang').value,kc=Q('d-license').value;Q('d-lang').innerHTML=langOpt;Q('d-license').innerHTML=licOpt;Q('d-lang').value=kl;Q('d-license').value=kc;
+  }catch(e){}}
+ function dQuery(){return 'kind='+encodeURIComponent(Q('d-kind').value)+'&tier='+encodeURIComponent(Q('d-tier').value)+'&lang='+encodeURIComponent(Q('d-lang').value)+'&license='+encodeURIComponent(Q('d-license').value)+'&q='+encodeURIComponent(Q('d-q').value);}
+ async function dLoad(){await dFacets();dReload();}
+ async function dReload(){var body=Q('d-tbody');body.innerHTML='<tr><td colspan="6" class="empty">loading…</td></tr>';
+  try{var r=await (await fetch('/api/browse?'+dQuery()+'&page='+dPage+'&pageSize='+dSize)).json();dTotal=r.Total;var kind=Q('d-kind').value;
+   if(!r.Rows.length){body.innerHTML='<tr><td colspan="6" class="empty">no documents match this filter.</td></tr>';}
+   else body.innerHTML=r.Rows.map(function(d){return '<tr>'
+    +'<td class="mono clip" title="'+H(d.provenance)+'">'+H(d.provenance)+'</td>'
+    +'<td><span class="tier-'+H(d.tier)+'">'+H(d.tier)+'</span></td>'
+    +'<td class="mono">'+H(d.lang)+'</td><td class="mono">'+H(d.license)+'</td><td class="mono tnum">'+fmtB(d.bytes)+'</td>'
+    +'<td><div class="acts"><button class="btn sm" onclick="openDoc(\\''+H(kind)+'\\',\\''+H(d.id)+'\\')">View</button><button class="btn sm danger" onclick="dDelete(\\''+H(kind)+'\\',\\''+H(d.id)+'\\')">Delete</button></div></td></tr>';}).join('');
+   var pages=Math.max(1,Math.ceil(dTotal/dSize));
+   Q('d-total').textContent=fmtN(dTotal)+' document'+(dTotal===1?'':'s');
+   Q('d-pageinfo').textContent='page '+(dPage+1)+' of '+pages;
+   Q('d-prev').disabled=dPage<=0;Q('d-next').disabled=dPage>=pages-1;
+   Q('d-bulk').disabled=dTotal===0;Q('d-bulk').textContent=dTotal===0?'Delete matching':'Delete '+fmtN(dTotal)+' matching';
+  }catch(e){body.innerHTML='<tr><td colspan="6" class="empty">failed to load</td></tr>';}
+ }
+ function dSearch(){dPage=0;dReload();}
+ function dPrev(){if(dPage>0){dPage--;dReload();}}
+ function dNext(){dPage++;dReload();}
+ async function dDelete(kind,id){if(!confirm('Delete this document permanently?'))return;
+  await fetch('/api/browse/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:kind,id:id})});
+  if(dTotal%dSize===1&&dPage>0)dPage--;dReload();loadOverview();}
+ async function dBulk(){var kind=Q('d-kind').value;
+  if(prompt('This permanently deletes ALL '+fmtN(dTotal)+' matching documents in "'+kind+'". Type DELETE to confirm.')!=='DELETE')return;
+  var r=await (await fetch('/api/browse/delete-matching',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:kind,tier:Q('d-tier').value,lang:Q('d-lang').value,license:Q('d-license').value,q:Q('d-q').value})})).json();
+  alert('Deleted '+fmtN(r.deleted)+' documents.');dPage=0;dLoad();loadOverview();}
+ async function openDoc(kind,id){var m=Q('modal');Q('m-title').textContent=id;Q('m-meta').textContent='';Q('m-body').textContent='loading…';m.classList.add('open');
+  try{var f=await (await fetch('/api/browse/doc?kind='+encodeURIComponent(kind)+'&id='+encodeURIComponent(id))).json();if(f.error){Q('m-body').textContent='error: '+f.error;return;}
+   Q('m-title').textContent=f.provenance;Q('m-meta').innerHTML='<span class="tier-'+H(f.tier)+'">'+H(f.tier)+'</span> · '+H(f.lang)+' · '+H(f.license)+' · '+H(f.origin)+' · '+fmtB(f.bytes)+(f.reason?' · '+H(f.reason):'');Q('m-body').textContent=f.content;
+  }catch(e){Q('m-body').textContent='failed';}}
+ function closeModal(){Q('modal').classList.remove('open');}
+
+ // ── Train ──
+ var tMode='pretrain';
+ function setMode(m){tMode=m;Q('t-mode-pre').classList.toggle('on',m==='pretrain');Q('t-mode-chat').classList.toggle('on',m==='chat');Q('t-mix-pretrain').style.display=m==='pretrain'?'':'none';Q('t-mix-chat').style.display=m==='chat'?'':'none';}
+ function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];}
+ function renderResumeOptions(){var sel=Q('t-resume');var cur=sel.value;
+  sel.innerHTML='<option value="">◇ New model</option>'+checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">↻ '+H(c.Name)+' ('+H(c.Format)+', step '+fmtN(c.Step)+')</option>';}).join('');
+  sel.value=cur;}
+ function onResume(){var name=Q('t-resume').value;var note=Q('t-resumenote');
+  if(!name){note.style.display='none';return;}
+  var c=checkpoints.filter(function(x){return x.Name===name;})[0];if(!c){note.style.display='none';return;}
+  Q('t-name').value=c.Name;setMode(c.Format==='chat'?'chat':'pretrain');prefillArch(c);
+  note.style.display='';note.innerHTML='Will <b>continue</b> "'+H(c.Name)+'" from step '+fmtN(c.Step)+' — raise Steps to train it further (same architecture is kept).';}
+ function prefillArch(c){
+  if(c.Embed){Q('t-embed').value=c.Embed;Q('t-layers').value=c.Layers;Q('t-heads').value=c.Heads;Q('t-ctx').value=c.Block;}
+  else{var mm=/emb(\\d+)\\s*L(\\d+)\\s*ctx(\\d+)/.exec(c.Arch||'');if(mm){Q('t-embed').value=mm[1];Q('t-layers').value=mm[2];Q('t-ctx').value=mm[3];}}
+  if(c.Vocab)Q('t-vocab').value=c.Vocab;}
+ function resumeModel(name){navTo('train');location.hash='#train';var sel=Q('t-resume');sel.value=name;onResume();}
+ function trainSettings(){var vocab=+Q('t-vocab').value||512;
+  return {Kind:tMode,Name:Q('t-name').value,Resume:!!Q('t-resume').value,Steps:+Q('t-steps').value,
+   CorpusMb:+Q('t-corpus').value,EmbedDim:+Q('t-embed').value,NumLayers:+Q('t-layers').value,NumHeads:+Q('t-heads').value,
+   BlockSize:+Q('t-ctx').value,Merges:Math.max(0,vocab-256),BatchSize:+Q('t-batch').value,
+   KnowledgeMb:+Q('t-know').value,ConvCount:+Q('t-conv').value,CodeSamples:+Q('t-code').value};}
+ function tStart(){if(!wsReady())return;save();WS.send(JSON.stringify({type:'train',settings:trainSettings()}));}
+ function tStop(){if(wsReady()){WS.send(JSON.stringify({type:'train-stop'}));Q('t-start').textContent='stopping…';Q('t-start').disabled=true;}}
+ function setTrainBtn(run){training=run;setJobs();var b=Q('t-start');b.disabled=false;b.textContent=run?'■ Stop (keeps last checkpoint)':'▶ Train model';b.className='btn '+(run?'danger':'pri');b.onclick=run?tStop:tStart;}
+ function drawSpark(){var el=Q('t-spark');if(!el)return;var L=lossHistory;if(!L.length){el.innerHTML='';return;}
+  var W=300,Hh=74,min=Math.min.apply(null,L),max=Math.max.apply(null,L),rng=(max-min)||1,n=L.length;
+  var pts=L.map(function(v,i){var x=n<2?W:(i/(n-1))*W;var y=6+(1-(v-min)/rng)*(Hh-14);return x.toFixed(1)+','+y.toFixed(1);});
+  var d='M'+pts.join(' L');var last=pts[pts.length-1].split(',');
+  el.innerHTML='<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>'
+   +'<path d="'+d+' L'+W+','+Hh+' L0,'+Hh+' Z" fill="url(#sg)"/><path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2"/><circle cx="'+last[0]+'" cy="'+last[1]+'" r="3" fill="var(--accent)"/>';}
+ function onTrain(e){var log=Q('t-log');
+  if(e.kind==='train-start'){lossHistory=[];trainStart=Date.now();setTrainBtn(true);Q('t-badge').className='pill run';Q('t-badge').textContent='step 0 / '+e.steps;log.innerHTML='';logLine(log,'training '+e.steps+' steps…','a');drawSpark();}
+  else if(e.kind==='train-info'){logLine(log,e.text);}
+  else if(e.kind==='train-progress'){lossHistory.push(e.trainLoss);if(lossHistory.length>240)lossHistory.shift();drawSpark();
+   Q('t-badge').textContent='step '+e.step+' / '+e.steps;Q('t-loss').textContent=e.trainLoss.toFixed(3)+(typeof e.valLoss==='number'?' (val '+e.valLoss.toFixed(3)+')':'');
+   var el=e.elapsedMs||(Date.now()-trainStart);Q('t-elapsed').textContent=fmtDur(el);Q('t-eta').textContent=e.step>0?'~'+fmtDur(el/e.step*(e.steps-e.step))+' left':'';
+   if(typeof e.valLoss==='number')logLine(log,'step '+e.step+'/'+e.steps+'  loss '+e.trainLoss.toFixed(3)+'  val '+e.valLoss.toFixed(3));}
+  else if(e.kind==='train-done'){setTrainBtn(false);Q('t-badge').className='pill done';Q('t-badge').textContent='done';logLine(log,'saved to '+e.savedTo+' — reloaded into Chat','ok');}
+  else if(e.kind==='train-error'){setTrainBtn(false);var stopped=e.message.indexOf('stop')>=0;Q('t-badge').className='pill '+(stopped?'idle':'err');Q('t-badge').textContent=stopped?'stopped':'error';logLine(log,e.message,stopped?'w':'e');}
+ }
+
+ // ── Models ──
+ async function loadCheckpoints(){try{checkpoints=await (await fetch('/api/checkpoints')).json();}catch(e){checkpoints=[];}renderModels();renderResumeOptions();}
+ function renderModels(){var b=Q('m-tbody');if(!checkpoints.length){b.innerHTML='<tr><td colspan="7" class="empty">no saved models yet — train one in the Train view.</td></tr>';Q('nav-models-tag').textContent='0';return;}
+  Q('nav-models-tag').textContent=checkpoints.length;
+  b.innerHTML=checkpoints.map(function(c){var loaded=c.Name===loadedName;
+   return '<tr><td><b>'+H(c.Name)+'</b>'+(loaded?' <span class="pill done">loaded</span>':'')+'</td>'
+    +'<td><span class="pill '+(c.Format==='chat'?'chat':'base')+'">'+H(c.Format)+'</span></td>'
+    +'<td class="mono tnum">'+fmtP(c.Params)+'</td><td class="mono">'+H(c.Arch)+'</td>'
+    +'<td class="mono tnum">step '+fmtN(c.Step)+'</td><td style="color:var(--mut)">'+H((c.CreatedAt||'').slice(0,10))+'</td>'
+    +'<td><div class="acts"><button class="btn sm'+(loaded?'':' pri')+'" onclick="openModel(\\''+H(c.Name)+'\\')">Open in Chat</button>'
+    +'<button class="btn sm" onclick="resumeModel(\\''+H(c.Name)+'\\')">Resume training</button>'
+    +'<button class="btn sm danger" onclick="deleteModel(\\''+H(c.Name)+'\\')">Delete</button></div></td></tr>';}).join('');}
+ function openModel(name){if(wsReady())WS.send(JSON.stringify({type:'load-model',name:name}));location.href='/chat';}
+ async function deleteModel(name){if(!confirm('Delete model "'+name+'" permanently? This cannot be undone.'))return;
+  await fetch('/api/checkpoint/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})});loadCheckpoints();loadOverview();}
+
+ // ── Chat (embedded view) — reuses the /ws chat protocol + surfaces the reasoning trace ──
+ function uuid(){return (window.crypto&&crypto.randomUUID)?crypto.randomUUID():'c-'+new Date().getTime().toString(16)+'-'+Math.floor(Math.random()*1e9).toString(16);}
+ function chModelOptions(){var sel=Q('ch-model');if(!sel)return;var cur=sel.value||loadedName;
+  if(!checkpoints.length){sel.innerHTML='<option value="">(no saved models — train one first)</option>';return;}
+  sel.innerHTML=checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">'+H(c.Name)+' — '+fmtP(c.Params)+' · '+H(c.Format)+'</option>';}).join('');if(cur)sel.value=cur;}
+ function chInit(){chModelOptions();if(!chConv)chNew();}
+ function chPick(name){if(name&&wsReady()){WS.send(JSON.stringify({type:'load-model',name:name}));Q('ch-stat').textContent='loading '+name+'…';}}
+ function chBubbleEl(role,text,cls){var d=document.createElement('div');d.className='bub '+(cls||role);d.innerHTML='<div class="who">'+H(role)+'</div>';var t=document.createElement('div');t.textContent=text;d.appendChild(t);var box=Q('ch-bubbles');box.appendChild(d);box.scrollTop=box.scrollHeight;return {wrap:d,txt:t};}
+ function chNew(){chConv=uuid();Q('ch-bubbles').innerHTML='<div class="empty">say something to test the model</div>';Q('ch-trace').innerHTML='<div class="empty">the model steps (think → tool → answer) appear here after a reply</div>';Q('ch-stat').textContent='';}
+ function chTrace(lines){var el=Q('ch-trace');if(!el)return;if(!lines||!lines.length){el.innerHTML='<div class="empty">no tool/think steps — the model replied directly</div>';return;}
+  el.innerHTML=lines.map(function(L){var k=(L.Kind==='think'||L.Kind==='tool'||L.Kind==='answer')?L.Kind:'answer';var txt=H(L.Text)+(L.Detail?' <span class="dt">→ '+H(L.Detail)+'</span>':'');return '<div class="step"><span class="b '+k+'">'+k+'</span><span class="x">'+txt+'</span></div>';}).join('');}
+ function chSend(){var box=Q('ch-box'),text=box.value.trim();if(!text||chStreaming)return;if(!wsReady())return;if(!loadedName){Q('ch-stat').textContent='load a model first (pick one above)';return;}if(!chConv)chConv=uuid();
+  var em=Q('ch-bubbles').querySelector('.empty');if(em)Q('ch-bubbles').innerHTML='';
+  box.value='';chBubbleEl('you',text,'u');chBubble=chBubbleEl('model','','');chBubble.wrap.classList.add('cursor');
+  chStreaming=true;Q('ch-send').disabled=true;var mx=Math.max(1,Math.min(4096,+Q('ch-max').value||512));Q('ch-stat').textContent='generating (max '+mx+' tokens)…';Q('ch-trace').innerHTML='<div class="empty">reasoning…</div>';
+  WS.send(JSON.stringify({type:'chat',convId:chConv,message:text,temperature:+Q('ch-temp').value,maxTokens:mx}));}
+ function chEnd(){chStreaming=false;Q('ch-send').disabled=false;if(chBubble)chBubble.wrap.classList.remove('cursor');chBubble=null;Q('ch-box').focus();}
+
+ // ── System ──
+ function renderSystem(s){if(!s){Q('sys').innerHTML='<div class="empty">connecting…</div>';return;}lastSystem=s;
+  var gpu=(s.gpu&&s.gpu!=='none detected')?s.gpu:'none';
+  var card=function(k,v,c){return '<div class="card stat"><div class="k">'+k+'</div><div class="v" style="font-size:18px'+(c?';color:'+c:'')+'">'+H(v)+'</div></div>';};
+  Q('sys').innerHTML=card('Compute',s.gpuUsed?'GPU':'CPU')+card('Backend',s.computeBackend)+card('Go FFI',s.goFfiAvailable?'available':'no',s.goFfiAvailable?'var(--good)':'var(--mut)')
+   +card('CPU',s.cpuModel)+card('Cores',String(s.cpuCount))+card('Memory',s.memGb+' GB')+card('GPU',gpu)+card('Runtime',s.runtime);}
+
+ // ── WS ──
+ function wsReady(){if(WS&&WS.readyState===1)return true;alert('not connected to the server');return false;}
+ function connDot(on){Q('conndot').className='dt'+(on?' on':'');Q('connfoot').className='dot'+(on?' on':'');Q('connfoot-t').textContent=on?'online':'reconnecting…';}
+ function connect(){WS=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  WS.onopen=function(){connDot(true);};
+  WS.onclose=function(){connDot(false);setTimeout(connect,2000);};
+  WS.onmessage=function(ev){var m=JSON.parse(ev.data);
+   if(m.type==='system'){lastSystem=m.data;if(Q('view-system').classList.contains('on'))renderSystem(m.data);}
+   else if(m.type==='model'){if(m.name)loadedName=m.name;Q('loadedchip').innerHTML=m.data?('Loaded: <b>'+H(loadedName)+'</b> · '+fmtP(m.data.TotalParams)):'No model loaded';renderModelCard(m.data);renderModels();chModelOptions();if(!chStreaming)Q('ch-stat').textContent='';}
+   else if(m.type==='checkpoints'){checkpoints=m.data;renderModels();renderResumeOptions();renderModelCard(null);chModelOptions();if(checkpoints.length)loadOverview();}
+   else if(m.type==='stats'){/* code-only aggregate; Overview uses /api/kinds instead */}
+   else if(m.type==='learn')onLearn(m.event);
+   else if(m.type==='train')onTrain(m.event);
+   else if(m.type==='chat-delta'&&m.convId===chConv&&chBubble){chBubble.txt.textContent+=m.delta;var cb=Q('ch-bubbles');cb.scrollTop=cb.scrollHeight;}
+   else if(m.type==='chat-trace'&&m.convId===chConv)chTrace(m.lines);
+   else if(m.type==='chat-done'&&m.convId===chConv){Q('ch-stat').textContent='';chEnd();}
+   else if(m.type==='chat-error'&&m.convId===chConv){if(chBubble){chBubble.wrap.className='bub err';chBubble.txt.textContent='error: '+m.error;}Q('ch-stat').textContent='';chEnd();}
+  };}
+
+ // ── settings persistence ──
+ var FIELDS=['c-query','c-repos','c-minlevel','c-maxrepos','c-maxfiles','c-maxmb','c-maxkb','c-skip','t-name','t-steps','t-embed','t-layers','t-heads','t-ctx','t-vocab','t-batch','t-corpus','t-know','t-conv','t-code'];
+ function save(){var o={};FIELDS.forEach(function(id){var el=Q(id);if(!el)return;o[id]=el.type==='checkbox'?el.checked:el.value;});try{localStorage.setItem('shahd.cfg',JSON.stringify(o));}catch(e){}}
+ function restore(){try{var o=JSON.parse(localStorage.getItem('shahd.cfg')||'{}');FIELDS.forEach(function(id){if(o[id]===undefined)return;var el=Q(id);if(!el)return;if(el.type==='checkbox')el.checked=!!o[id];else el.value=o[id];});}catch(e){}}
+
+ // ── init ──
+ function init(){
+  applyTheme((function(){try{return localStorage.getItem('shahd.theme');}catch(e){return null;}})()||(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));
+  var links=document.querySelectorAll('.nav a[data-v]');for(var i=0;i<links.length;i++)links[i].addEventListener('click',function(e){e.preventDefault();location.hash='#'+this.getAttribute('data-v');});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')closeModal();});
+  Q('d-kind').addEventListener('change',function(){dPage=0;dLoad();});
+  Q('ch-box').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();chSend();}});
+  restore();pickSource('github');setMode('pretrain');
+  navTo((location.hash||'#overview').slice(1));
+  connect();loadOverview();loadCheckpoints();
+ }
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+`;

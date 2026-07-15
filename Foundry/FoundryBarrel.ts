@@ -10,7 +10,7 @@ export type { TierDecision } from "./Tiering.ts";
 export { DetectSpdx, NormalizeLicense } from "./SpdxDetector.ts";
 export type { SpdxResult } from "./SpdxDetector.ts";
 export { HashingEmbedding, CosineSimilarity } from "./Embedding.ts";
-export type { DocumentStore, SimilarHit, RepoSummary, FoundryStats } from "./DocumentStore.ts";
+export type { DocumentStore, SimilarHit, RepoSummary, FoundryStats, DocumentFilter, DocumentPage } from "./DocumentStore.ts";
 export { InMemoryDocumentStore } from "./InMemoryDocumentStore.ts";
 export { BuildReport, RenderReportText } from "./QualityReport.ts";
 export type { FoundryReport } from "./QualityReport.ts";

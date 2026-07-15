@@ -11,17 +11,33 @@ import postgres from "postgres";
 import type { Checkpoint } from "../Brain/Checkpoint/CheckpointFormat.ts";
 import { ParseCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
 
-export type CheckpointSummary = { Name: string; CreatedAt: string; Params: number; Vocab: number; Arch: string; Corpus: string };
+// Format = "chat" (SFT/agent model) or "base" (pretrained autocomplete); Step = training steps done
+// so far (for the dashboard's "resume/extend from step N"). Embed/Layers/Heads/Block are the exact
+// architecture — the dashboard's "Resume training" prefills them so a re-run matches the checkpoint's
+// arch exactly (a NumHeads mismatch would otherwise silently retrain from scratch). All from the Meta.
+export type CheckpointSummary = { Name: string; CreatedAt: string; Params: number; Vocab: number; Arch: string; Corpus: string; Format: string; Step: number; Embed: number; Layers: number; Heads: number; Block: number };
 
 type MetaRow = { name: string; created_at: string; meta: string };
 type DataRow = { data: string };
+type StoredMeta = { params: number; vocab: number; arch: string; corpus: string; format: string; step: number; embed: number; layers: number; heads: number; block: number };
 
-function MetaOf(Ckpt: Checkpoint): { params: number; vocab: number; arch: string; corpus: string } {
+function MetaOf(Ckpt: Checkpoint): StoredMeta {
+  const Meta = Ckpt.Meta as Record<string, unknown>;
+  const M = Ckpt.Config.Model;
+  const Corpus = String(Meta["Corpus"] ?? "");
+  // Prefer the explicit Meta.Format; infer from the corpus tag for older checkpoints that predate it.
+  const Format = typeof Meta["Format"] === "string" ? (Meta["Format"] as string) : Corpus.includes("sft") ? "chat" : "base";
   return {
     params: Ckpt.Params.reduce((Acc, P) => Acc + P.Rows * P.Cols, 0),
-    vocab: Ckpt.Config.Model.VocabSize,
-    arch: `emb${Ckpt.Config.Model.EmbedDim} L${Ckpt.Config.Model.NumLayers} ctx${Ckpt.Config.Model.BlockSize}`,
-    corpus: String((Ckpt.Meta as Record<string, unknown>)["Corpus"] ?? ""),
+    vocab: M.VocabSize,
+    arch: `emb${M.EmbedDim} L${M.NumLayers} h${M.NumHeads} ctx${M.BlockSize}`,
+    corpus: Corpus,
+    format: Format,
+    step: Number(Meta["Step"] ?? 0),
+    embed: M.EmbedDim,
+    layers: M.NumLayers,
+    heads: M.NumHeads,
+    block: M.BlockSize,
   };
 }
 
@@ -60,9 +76,28 @@ export class PostgresCheckpointStore {
     await this.Ready;
     const Rows = (await this.Sql`SELECT name, created_at, meta FROM checkpoints ORDER BY created_at DESC`) as unknown as MetaRow[];
     return Rows.map((R) => {
-      const M = JSON.parse(R.meta) as { params: number; vocab: number; arch: string; corpus: string };
-      return { Name: R.name, CreatedAt: R.created_at, Params: M.params, Vocab: M.vocab, Arch: M.arch, Corpus: M.corpus };
+      const M = JSON.parse(R.meta) as Partial<StoredMeta>;
+      const Corpus = M.corpus ?? "";
+      return {
+        Name: R.name,
+        CreatedAt: R.created_at,
+        Params: M.params ?? 0,
+        Vocab: M.vocab ?? 0,
+        Arch: M.arch ?? "",
+        Corpus,
+        Format: M.format ?? (Corpus.includes("sft") ? "chat" : "base"),
+        Step: M.step ?? 0,
+        Embed: M.embed ?? 0,
+        Layers: M.layers ?? 0,
+        Heads: M.heads ?? 0,
+        Block: M.block ?? 0,
+      };
     });
+  }
+
+  async Delete(Name: string): Promise<void> {
+    await this.Ready;
+    await this.Sql`DELETE FROM checkpoints WHERE name = ${Name}`;
   }
 
   async Close(): Promise<void> {

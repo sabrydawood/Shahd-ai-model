@@ -6,10 +6,11 @@
 
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq, sql, desc } from "drizzle-orm";
+import { eq, sql, desc, and, or, ilike } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import { DocumentsTable } from "./FoundrySchema.ts";
 import type { DocumentRow, DocumentInsert } from "./FoundrySchema.ts";
-import type { DocumentStore, SimilarHit, RepoSummary, FoundryStats } from "./DocumentStore.ts";
+import type { DocumentStore, SimilarHit, RepoSummary, FoundryStats, DocumentFilter, DocumentPage } from "./DocumentStore.ts";
 import type { DocumentRecord, Tier } from "./DocumentRecord.ts";
 import { CosineSimilarity } from "./Embedding.ts";
 
@@ -115,6 +116,51 @@ export class PostgresDocumentStore implements DocumentStore {
   async DocumentById(Id: string): Promise<DocumentRecord | null> {
     const Rows = await this.Db.select().from(this.Table).where(eq(this.Table.id, Id)).limit(1);
     return Rows[0] ? FromRow(Rows[0]) : null;
+  }
+
+  // Combine a browse filter into a single SQL condition (undefined = no constraint = all rows).
+  // Search matches provenance OR content (case-insensitive substring); on a large table this is a
+  // seq scan, acceptable for a manual admin/cleanup tool that runs infrequently.
+  private WhereFor(Filter: DocumentFilter): SQL | undefined {
+    const Conds: SQL[] = [];
+    if (Filter.Tier) Conds.push(eq(this.Table.tier, Filter.Tier));
+    if (Filter.Lang) Conds.push(eq(this.Table.lang, Filter.Lang));
+    if (Filter.License) Conds.push(eq(this.Table.license, Filter.License));
+    const Search = Filter.Search?.trim();
+    if (Search) {
+      const Like = `%${Search}%`;
+      const Match = or(ilike(this.Table.provenance, Like), ilike(this.Table.content, Like));
+      if (Match) Conds.push(Match);
+    }
+    return Conds.length === 0 ? undefined : and(...Conds);
+  }
+
+  async Query(Filter: DocumentFilter, Offset: number, Limit: number): Promise<DocumentPage> {
+    const Cond = this.WhereFor(Filter);
+    const Select = this.Db.select().from(this.Table);
+    // Tie-break on the unique id: a whole collection run shares ONE ingestedAt, so ordering by it
+    // alone gives Postgres no stable order across paged OFFSET/LIMIT queries — pages could repeat or
+    // skip rows. The id (primary key) makes the order total and pagination deterministic.
+    const Rows = await (Cond ? Select.where(Cond) : Select).orderBy(desc(this.Table.ingestedAt), desc(this.Table.id)).offset(Offset).limit(Limit);
+    const Counting = this.Db.select({ Count: sql<number>`count(*)::int` }).from(this.Table);
+    const CountRows = await (Cond ? Counting.where(Cond) : Counting);
+    return { Rows: Rows.map(FromRow), Total: Number(CountRows[0]?.Count ?? 0) };
+  }
+
+  async DeleteById(Id: string): Promise<number> {
+    const Deleted = await this.Db.delete(this.Table).where(eq(this.Table.id, Id)).returning({ Id: this.Table.id });
+    return Deleted.length;
+  }
+
+  async DeleteMatching(Filter: DocumentFilter): Promise<number> {
+    // Count first, then delete without materializing every id (a filter could match 100k+ rows).
+    const Cond = this.WhereFor(Filter);
+    const Counting = this.Db.select({ Count: sql<number>`count(*)::int` }).from(this.Table);
+    const CountRows = await (Cond ? Counting.where(Cond) : Counting);
+    const N = Number(CountRows[0]?.Count ?? 0);
+    const Del = this.Db.delete(this.Table);
+    await (Cond ? Del.where(Cond) : Del);
+    return N;
   }
 
   async ReclassifyBySource(Source: string, NewLicense: string, MinQuality: number): Promise<{ Promoted: number; KeptLowQuality: number }> {

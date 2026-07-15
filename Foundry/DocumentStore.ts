@@ -9,6 +9,14 @@ export type SimilarHit = { Doc: DocumentRecord; Score: number };
 // Per-repo rollup for the dashboard (accordion list + "already learned" skip).
 export type RepoSummary = { Source: string; Files: number; Bytes: number };
 
+// A filter for the data-browser: any subset of tier/lang/license + a free-text search (matched
+// against provenance and content). Omitted fields are unconstrained. Empty filter = everything.
+export type DocumentFilter = { Tier?: Tier; Lang?: string; License?: string; Search?: string };
+
+// One page of a filtered browse: the rows for this page plus the TOTAL matching count (so the UI can
+// render "page X of Y" without loading every row).
+export type DocumentPage = { Rows: DocumentRecord[]; Total: number };
+
 // Aggregate counts for the dashboard cards — computed WITHOUT loading document content.
 export type FoundryStats = {
   Total: number;
@@ -33,6 +41,16 @@ export interface DocumentStore {
   DocumentsBySource(Source: string, Limit: number): Promise<DocumentRecord[]>;
   /** One document's full record by id (content hash) — powers the file viewer. Null if absent. */
   DocumentById(Id: string): Promise<DocumentRecord | null>;
+  /**
+   * A filtered, paginated page of documents (the data-browser). Offset/Limit page the results;
+   * Total is the full matching count for the pager. Rows come newest-first (by ingestion) so the
+   * most recently collected data is reviewed first.
+   */
+  Query(Filter: DocumentFilter, Offset: number, Limit: number): Promise<DocumentPage>;
+  /** Delete one document by id. Returns the number removed (0 if the id was absent, else 1). */
+  DeleteById(Id: string): Promise<number>;
+  /** Bulk-delete every document matching a filter (corpus cleanup). Returns how many were removed. */
+  DeleteMatching(Filter: DocumentFilter): Promise<number>;
   /** Aggregate dashboard stats (counts by tier/lang/license + filtered bytes), computed efficiently. */
   Stats(): Promise<FoundryStats>;
   /**

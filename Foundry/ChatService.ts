@@ -5,7 +5,11 @@
 
 import type { ChatStore, ChatMessage } from "./ChatStore.ts";
 
-export type ChatOpts = { Temperature: number; MaxTokens: number; ShouldStop?: () => boolean };
+// One reasoning-trace line the model produced this turn (think / tool call+result / final answer) —
+// structurally identical to Brain's TraceLine but declared here so ChatService stays decoupled from
+// the model layer. Surfaced to the UI so the operator SEES how the model reasoned, not just its reply.
+export type ChatTraceLine = { Step: number; Kind: string; Text: string; Detail?: string };
+export type ChatOpts = { Temperature: number; MaxTokens: number; ShouldStop?: () => boolean; OnTrace?: (Lines: ChatTraceLine[]) => void };
 export type ChatStreamFn = (Messages: ChatMessage[], Opts: ChatOpts, OnDelta: (Delta: string) => void) => Promise<string>;
 
 function TitleFrom(Message: string): string {

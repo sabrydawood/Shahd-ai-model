@@ -12,7 +12,10 @@
 // INJECTED so the handler is testable and never imports the network/model layers itself.
 
 import type { Server, ServerWebSocket } from "bun";
-import type { DocumentStore } from "./DocumentStore.ts";
+import type { DocumentStore, DocumentFilter, DocumentPage, FoundryStats } from "./DocumentStore.ts";
+import type { DocumentRecord } from "./DocumentRecord.ts";
+import type { DataKind } from "./DataKinds.ts";
+import { IsDataKind } from "./DataKinds.ts";
 import type { LearnSettings, LearnEvent, LearnFn, TrainSettings, TrainEvent, TrainFn } from "./DashboardTypes.ts";
 import type { KindStat } from "./FoundryStores.ts";
 import type { RepoLevel } from "./RepoQuality.ts";
@@ -33,7 +36,26 @@ export type DashboardOptions = {
   Checkpoints?: () => Promise<CheckpointSummary[]>; // list saved models (the chat-model picker)
   LoadModel?: (Name: string) => Promise<void>; // switch the chat model to a saved checkpoint
   KindStats?: () => Promise<KindStat[]>; // per-kind document counts/bytes (the data-separation breakdown)
+  // Data browser (per-kind, paginated) — kind-aware so it reaches every documents_<kind> table, not
+  // just the one InspectStore the panel is built with. All injected so Dashboard.ts stays DB-agnostic.
+  Browse?: (Kind: DataKind, Filter: DocumentFilter, Offset: number, Limit: number) => Promise<DocumentPage>;
+  Facets?: (Kind: DataKind) => Promise<FoundryStats>; // distinct tier/lang/license values for the filter dropdowns
+  DocContent?: (Kind: DataKind, Id: string) => Promise<DocumentRecord | null>; // one doc's full content (viewer)
+  DeleteDoc?: (Kind: DataKind, Id: string) => Promise<number>; // remove one document
+  DeleteMatching?: (Kind: DataKind, Filter: DocumentFilter) => Promise<number>; // bulk corpus cleanup
+  DeleteCheckpoint?: (Name: string) => Promise<void>; // remove a saved model
 };
+
+// Build a document filter from a flat record (query params or a POST body use the same lowercase keys).
+function ParseFilter(O: Record<string, unknown>): DocumentFilter {
+  const Filter: DocumentFilter = {};
+  const Tier = O["tier"];
+  if (Tier === "Filtered" || Tier === "Raw" || Tier === "Rejected") Filter.Tier = Tier;
+  if (typeof O["lang"] === "string" && O["lang"] !== "") Filter.Lang = O["lang"];
+  if (typeof O["license"] === "string" && O["license"] !== "") Filter.License = O["license"];
+  if (typeof O["q"] === "string" && O["q"] !== "") Filter.Search = O["q"];
+  return Filter;
+}
 
 function SafeName(Value: unknown): string {
   const Raw = typeof Value === "string" ? Value.trim() : "";
@@ -45,6 +67,7 @@ function ParseTrainSettings(Body: Record<string, unknown>): TrainSettings {
   return {
     Kind: Body["Kind"] === "chat" ? "chat" : "pretrain",
     Name: SafeName(Body["Name"]),
+    Resume: Body["Resume"] === true,
     Steps: ToNum(Body["Steps"], 500),
     CorpusMb: ToNum(Body["CorpusMb"], 1.5),
     EmbedDim: ToNum(Body["EmbedDim"], 96),
@@ -182,6 +205,58 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
       return Json({ provenance: Doc.Provenance, lang: Doc.Lang, tier: Doc.Tier, bytes: Doc.Bytes, license: Doc.License, origin: Doc.Origin, reason: Doc.RejectReason, content: Doc.Content });
     }
 
+    // ── Data browser (per-kind, paginated) — review + clean the collected corpus ──
+    if (Path === "/api/browse") {
+      if (Options.Browse === undefined) return Json({ error: "browse not wired" }, 501);
+      const Kind = Url.searchParams.get("kind") ?? "code";
+      if (!IsDataKind(Kind)) return Json({ error: "unknown kind" }, 400);
+      const Page = Math.max(0, ToNum(Url.searchParams.get("page"), 0));
+      const PageSize = Math.min(200, Math.max(1, ToNum(Url.searchParams.get("pageSize"), 50)));
+      const Filter = ParseFilter({ tier: Url.searchParams.get("tier"), lang: Url.searchParams.get("lang"), license: Url.searchParams.get("license"), q: Url.searchParams.get("q") });
+      const Result = await Options.Browse(Kind, Filter, Page * PageSize, PageSize);
+      // Lightweight rows only (no content/embedding) so a page over a huge table stays small.
+      const Rows = Result.Rows.map((D) => ({ id: D.Id, provenance: D.Provenance, tier: D.Tier, lang: D.Lang, license: D.License, bytes: D.Bytes, origin: D.Origin }));
+      return Json({ Rows, Total: Result.Total, Page, PageSize });
+    }
+    if (Path === "/api/browse/facets") {
+      if (Options.Facets === undefined) return Json({ error: "browse not wired" }, 501);
+      const Kind = Url.searchParams.get("kind") ?? "code";
+      if (!IsDataKind(Kind)) return Json({ error: "unknown kind" }, 400);
+      const S = await Options.Facets(Kind);
+      return Json({ Total: S.Total, Tiers: S.ByTier, Langs: Object.keys(S.ByLang).sort(), Licenses: Object.keys(S.ByLicense).sort() });
+    }
+    if (Path === "/api/browse/doc") {
+      if (Options.DocContent === undefined) return Json({ error: "browse not wired" }, 501);
+      const Kind = Url.searchParams.get("kind") ?? "code";
+      if (!IsDataKind(Kind)) return Json({ error: "unknown kind" }, 400);
+      const Doc = await Options.DocContent(Kind, Url.searchParams.get("id") ?? "");
+      if (Doc === null) return Json({ error: "not found" }, 404);
+      return Json({ provenance: Doc.Provenance, lang: Doc.Lang, tier: Doc.Tier, bytes: Doc.Bytes, license: Doc.License, origin: Doc.Origin, reason: Doc.RejectReason, content: Doc.Content });
+    }
+    if (Path === "/api/browse/delete" && Req.method === "POST") {
+      if (Options.DeleteDoc === undefined) return Json({ error: "delete not wired" }, 501);
+      const Body = (await Req.json().catch(() => ({}))) as { kind?: string; id?: string };
+      if (!IsDataKind(Body.kind ?? "") || typeof Body.id !== "string" || Body.id === "") return Json({ error: "kind + id required" }, 400);
+      const Deleted = await Options.DeleteDoc(Body.kind as DataKind, Body.id);
+      return Json({ deleted: Deleted });
+    }
+    if (Path === "/api/browse/delete-matching" && Req.method === "POST") {
+      if (Options.DeleteMatching === undefined) return Json({ error: "delete not wired" }, 501);
+      const Body = (await Req.json().catch(() => ({}))) as Record<string, unknown>;
+      const Kind = String(Body["kind"] ?? "");
+      if (!IsDataKind(Kind)) return Json({ error: "kind required" }, 400);
+      const Deleted = await Options.DeleteMatching(Kind, ParseFilter(Body));
+      return Json({ deleted: Deleted });
+    }
+    if (Path === "/api/checkpoint/delete" && Req.method === "POST") {
+      if (Options.DeleteCheckpoint === undefined) return Json({ error: "checkpoint delete not wired" }, 501);
+      const Body = (await Req.json().catch(() => ({}))) as { name?: string };
+      if (typeof Body.name !== "string" || Body.name === "") return Json({ error: "name required" }, 400);
+      await Options.DeleteCheckpoint(SafeName(Body.name));
+      Publish({ type: "checkpoints", data: (await Options.Checkpoints?.()) ?? [] }); // refresh every client's model list
+      return Json({ ok: true });
+    }
+
     if (Path === "/api/chat/conversations") return Json(Options.Chat !== undefined ? await Options.Chat.ListConversations() : []);
     if (Path === "/api/chat/conversation") return Json(Options.Chat !== undefined ? await Options.Chat.Messages(Url.searchParams.get("id") ?? "") : []);
     if (Path === "/api/chat/delete" && Req.method === "POST") {
@@ -273,7 +348,14 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     }
     try {
       // Abort generation if the client goes away (readyState leaves OPEN=1) — don't burn CPU for nobody.
-      const Opts = { Temperature: ToNum(Msg.temperature, 0.8), MaxTokens: ToNum(Msg.maxTokens, 160), ShouldStop: (): boolean => Socket.readyState !== 1 };
+      const Opts = {
+        Temperature: ToNum(Msg.temperature, 0.8),
+        MaxTokens: ToNum(Msg.maxTokens, 160),
+        ShouldStop: (): boolean => Socket.readyState !== 1,
+        OnTrace: (Lines: unknown): void => {
+          Socket.send(JSON.stringify({ type: "chat-trace", convId: ConvId, lines: Lines })); // the visible reasoning steps
+        },
+      };
       await Chat.Turn(ConvId, Msg.message, Opts, (Delta) => Socket.send(JSON.stringify({ type: "chat-delta", convId: ConvId, delta: Delta })));
       Socket.send(JSON.stringify({ type: "chat-done", convId: ConvId }));
     } catch (Caught) {

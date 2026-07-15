@@ -10,7 +10,9 @@ import type { DataKind } from "./DataKinds.ts";
 import { PostgresDocumentStore } from "./PostgresDocumentStore.ts";
 import type { DocumentStore } from "./DocumentStore.ts";
 
-export type KindStat = { Kind: DataKind; Count: number; FilteredBytes: number };
+// Per-kind rollup for the dashboard: total docs, the per-tier split (so the Overview cards can sum an
+// accurate cross-kind "trainable"/"rejected" instead of the code-only /api/stats), and trainable bytes.
+export type KindStat = { Kind: DataKind; Count: number; Filtered: number; Rejected: number; FilteredBytes: number };
 
 export class FoundryStores {
   private Sql: ReturnType<typeof postgres>;
@@ -37,9 +39,9 @@ export class FoundryStores {
     for (const Kind of DataKinds) {
       try {
         const S = await this.Kind(Kind).Stats();
-        Out.push({ Kind, Count: S.Total, FilteredBytes: S.FilteredBytes });
+        Out.push({ Kind, Count: S.Total, Filtered: S.ByTier.Filtered, Rejected: S.ByTier.Rejected, FilteredBytes: S.FilteredBytes });
       } catch {
-        Out.push({ Kind, Count: 0, FilteredBytes: 0 });
+        Out.push({ Kind, Count: 0, Filtered: 0, Rejected: 0, FilteredBytes: 0 });
       }
     }
     return Out;

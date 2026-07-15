@@ -67,13 +67,20 @@ model's scale ceiling.
 
 ### Chat-model recipe by tier
 
-| Chat tier | Base tier | SFT steps | Conversation examples | Realistically expect |
-|-----------|-----------|-----------|-----------------------|----------------------|
-| Seed-chat | Seed/Nano | ~500–800 | 1k–5k | learns the FORMAT (replies + stops); output mostly incoherent |
-| Micro-chat | Micro | ~2k–4k | 10k–50k | short on-topic replies on seen patterns; frequent errors |
-| Mini-chat | Mini | ~8k–15k | 50k–200k | simple coherent Q&A + tool calls; not fluent |
-| Small-chat | Small | ~20k+ | 200k–1M | basic assistant on narrow tasks (GPT-2-class); needs a GPU |
-| *fluent + senior-level code* | *7B+* | *100k+* | *millions* | *emergent at scale — not reachable from scratch on modest hardware* |
+SFT **keeps the base architecture** — a chat model is a base model plus an instruction stage — so the
+config columns mirror the base-family table (§1) and the dashboard Train panel (Chat mode). `SFT steps`
+and `Conversation examples` are the extra chat knobs. Note: chat adds ~12 **special tokens**
+(`<|user|>`, `<|assistant|>`, `<|tool_call|>`, `<|think|>`, …) on top of the `Vocab` shown, so the
+model's true vocab is `Vocab + ~12`.
+
+| Chat tier | Embed | Layers | Heads | Context | Vocab | Batch | SFT steps | Conversation examples | Realistically expect |
+|-----------|-------|--------|-------|---------|-------|-------|-----------|-----------------------|----------------------|
+| Seed-chat | 96 | 3 | 4 | 96 | 512 | 16 | ~500–800 | 1k–5k | learns the FORMAT (replies + stops); output mostly incoherent |
+| Nano-chat | 128 | 4 | 4 | 256 | 512 | 16 | ~800–1.5k | 3k–10k | replies + calls tools on seen patterns; still incoherent |
+| Micro-chat | 256 | 6 | 4 | 512 | 1,024 | 16 | ~2k–4k | 10k–50k | short on-topic replies on seen patterns; frequent errors |
+| Mini-chat | 512 | 8 | 8 | 1,024 | 4,096 | 32 | ~8k–15k | 50k–200k | simple coherent Q&A + tool calls; not fluent |
+| Small-chat | 768 | 12 | 12 | 2,048 | 16,384 | 64 | ~20k+ | 200k–1M | basic assistant on narrow tasks (GPT-2-class); needs a GPU |
+| *fluent + senior-level code* | *2,048+* | *32+* | *32+* | *8,192+* | *50,000+* | *256+* | *100k+* | *millions* | *emergent at scale — not reachable from scratch on modest hardware* |
 
 ### The data mix (per kind), set from the dashboard
 

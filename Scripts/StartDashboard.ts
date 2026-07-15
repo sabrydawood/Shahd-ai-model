@@ -23,7 +23,7 @@ import { RenderMessages } from "../Brain/Serving/RenderChat.ts";
 import { ChatSession } from "../Brain/Serving/ChatSession.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
 import type { AgentStep } from "../Brain/Serving/AgentLoop.ts";
-import { FormatTrace } from "../Brain/Serving/ReasoningTrace.ts";
+import { FormatTrace, BuildTrace } from "../Brain/Serving/ReasoningTrace.ts";
 import { BuildAgentTooling, RenderToolManifest } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
@@ -122,6 +122,7 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
     console.log(`[chat] step ${Step.Index}${Step.Call ? ` tool=${Step.Call.Name}` : ""}${Step.Terminal ? " (final)" : ""}`);
   });
   console.log(`[chat] reasoning trace:\n${FormatTrace(Steps)}`);
+  Opts.OnTrace?.(BuildTrace(Steps)); // surface the same trace to the dashboard UI (the visible reasoning lens)
   OnDelta(Result.FinalText);
   return Result.FinalText;
 }
@@ -253,6 +254,7 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
     `--Name=${Settings.Name}`, `--Steps=${Settings.Steps}`, `--Merges=${Settings.Merges}`,
     `--EmbedDim=${Settings.EmbedDim}`, `--Layers=${Settings.NumLayers}`, `--Heads=${Settings.NumHeads}`,
     `--Block=${Settings.BlockSize}`, `--Batch=${Settings.BatchSize}`,
+    ...(Settings.Resume ? ["--Resume"] : []), // continue/EXTEND an existing checkpoint of this name
   ];
   const Args = Settings.Kind === "chat"
     ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common, `--CodeSamples=${Settings.CodeSamples}`, `--ConvCount=${Settings.ConvCount}`]
@@ -303,6 +305,19 @@ StartDashboard(InspectStore, Port, Learn, {
   Checkpoints: ListCheckpoints,
   LoadModel: (Name: string) => ReloadModel(Name),
   KindStats: () => (Stores !== null ? Stores.Stats() : Promise.resolve([])),
+  // Data browser + cleanup: kind-aware, so it reaches every documents_<kind> table (Postgres) or the
+  // single fallback store (in-memory). Each op resolves the right store and delegates to it.
+  Browse: (Kind, Filter, Offset, Limit) => KindStore(Kind).Query(Filter, Offset, Limit),
+  Facets: (Kind) => KindStore(Kind).Stats(),
+  DocContent: (Kind, Id) => KindStore(Kind).DocumentById(Id),
+  DeleteDoc: (Kind, Id) => KindStore(Kind).DeleteById(Id),
+  DeleteMatching: (Kind, Filter) => KindStore(Kind).DeleteMatching(Filter),
+  DeleteCheckpoint: async (Name: string): Promise<void> => {
+    if (DbUrl === undefined || DbUrl === "") return;
+    const CkptStore = new PostgresCheckpointStore(DbUrl);
+    await CkptStore.Delete(Name);
+    await CkptStore.Close();
+  },
 });
 console.log(`Foundry control panel: http://localhost:${Port}  (store=${Stores !== null ? "postgres/per-kind" : "memory"}, ${await InspectStore.Count()} code docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
 console.log(`  chat model: ${ModelHolder.Source} (memory: ${DbUrl ? "postgres" : "in-memory"})`);

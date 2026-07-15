@@ -31,6 +31,8 @@ export type LearnFn = (Settings: LearnSettings, OnEvent: (Event: LearnEvent) => 
 export type TrainSettings = {
   Kind: "pretrain" | "chat"; // pretrain a base model (TrainOnFoundry) or SFT a chat model (TrainSftChat)
   Name: string; // checkpoint name — train/keep multiple models side by side
+  Resume: boolean; // continue/EXTEND an existing checkpoint of this name (weights+optimizer+RNG) — the
+  // "train it more" flow. When false, a completed same-name run retrains fresh (unchanged behavior).
   Steps: number;
   CorpusMb: number;
   EmbedDim: number;

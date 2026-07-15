@@ -25,12 +25,13 @@ import type { CodeSample } from "../Brain/Sft/OwnedSftData.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { BuildCheckpoint } from "../Brain/Checkpoint/CheckpointWriter.ts";
+import { ApplyCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
 import type { Checkpoint } from "../Brain/Checkpoint/CheckpointFormat.ts";
 import { PostgresCheckpointStore } from "../Foundry/PostgresCheckpointStore.ts";
 import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
 import { StripThinking } from "../Brain/Reasoning/ThinkingMode.ts";
 import { ResolveFoundryStores } from "./FoundryEnv.ts";
-import { ReadArg } from "./ScriptArgs.ts";
+import { ReadArg, ReadFlag } from "./ScriptArgs.ts";
 
 const Name = ReadArg("--Name=", "Chat");
 const Steps = Number(ReadArg("--Steps=", "600"));
@@ -41,6 +42,7 @@ const NumHeads = Number(ReadArg("--Heads=", "4"));
 const BlockSize = Number(ReadArg("--Block=", "256"));
 const BatchSize = Number(ReadArg("--Batch=", "8"));
 const Lr = Number(ReadArg("--Lr=", "0.002"));
+const ResumeFlag = ReadFlag("--Resume"); // explicit "train it more" — extend an existing chat model
 
 // 1) SFT data from the SEPARATED kind tables, each capped independently: code (for the owned
 // language-ID task) from documents_code, real dialogue from documents_conversation. Knowledge
@@ -67,12 +69,37 @@ for (const Doc of ConvDocs) {
 await Stores.Close();
 console.log(`sft: ${Conversations.length} conversations (${CodeDocs.length} code samples + ${AddedGeneral} real dialogues from documents_conversation)`);
 
-// 2) SpecialTokenizer = byte-level BPE (trained on the conversation text) + chat/tool special tokens.
-const Specials = [...ChatTokenList, ...ToolTokenList];
+// RESUME/EXTEND: continue an existing chat checkpoint of this name — reuse its EXACT tokenizer (merges
+// + specials), weights, optimizer, and RNG — instead of retraining fresh. Auto on a same-name/same-
+// Steps run (crash recovery); with --Resume it also EXTENDS a finished model to a higher Steps (the
+// dashboard "train it more" flow). Requires a matching architecture, else it starts fresh.
+const DbUrl = process.env["DATABASE_URL"];
+const CkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckpointStore(DbUrl) : null;
+type ChatTokenizerState = { Kind: string; Merges: [number, number][]; Specials: string[] };
+let Resume: { Ckpt: Checkpoint; Step: number } | null = null;
+let ResumeState: ChatTokenizerState | null = null;
+if (CkptStore !== null) {
+  const Existing = await CkptStore.Load(Name);
+  const State = (Existing?.TokenizerState ?? null) as ChatTokenizerState | null;
+  if (Existing !== null && State !== null && State.Kind === "Bpe" && Array.isArray(State.Merges) && Array.isArray(State.Specials)) {
+    const M = Existing.Config.Model;
+    const ArchMatch = M.EmbedDim === EmbedDim && M.NumLayers === NumLayers && M.NumHeads === NumHeads && M.BlockSize === BlockSize;
+    const Match = ArchMatch && (ResumeFlag || Existing.Config.Schedule.MaxSteps === Steps);
+    const DoneStep = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
+    if (Match && DoneStep < Steps) {
+      Resume = { Ckpt: Existing, Step: DoneStep };
+      ResumeState = State;
+    }
+  }
+}
+
+// 2) SpecialTokenizer = byte-level BPE + chat/tool special tokens. Reuse the checkpoint's exact merges
+// + specials when resuming (so token ids align with the trained embeddings); else train fresh.
+const Specials = ResumeState !== null ? ResumeState.Specials : [...ChatTokenList, ...ToolTokenList];
 const CorpusText = Conversations.flatMap((C) => C.map((M) => M.Content)).join("\n");
-const Bpe = TrainBpe(CorpusText, NumMerges);
+const Bpe = ResumeState !== null ? { Merges: ResumeState.Merges } : TrainBpe(CorpusText, NumMerges);
 const Tokenizer = new SpecialTokenizer(new BytePairEncoder(Bpe), Specials);
-console.log(`tokenizer: ${Bpe.Merges.length} merges + ${Specials.length} specials -> vocab ${Tokenizer.VocabSize}`);
+console.log(`tokenizer: ${Bpe.Merges.length} merges + ${Specials.length} specials -> vocab ${Tokenizer.VocabSize}${Resume !== null ? " (reused from checkpoint)" : ""}`);
 
 // 3) Pre-render every conversation with the loss mask; keep only those that fit the context AND have
 // at least one trainable (assistant) token. Report how many were dropped (no silent truncation).
@@ -101,19 +128,23 @@ const Config = LoadConfig({
 const ComputeChoice = ActivateFromConfig(Config);
 const Model = new Shahd(Config, Rng.InitRng);
 const Optimizer = CreateOptimizer(Model.Parameters(), Config);
+let StartStep = 0;
+if (Resume !== null) {
+  ApplyCheckpoint(Resume.Ckpt, Model, Optimizer, Rng); // restore weights + optimizer + RNG state
+  StartStep = Resume.Step;
+}
 const Params = Model.Parameters().reduce((A, P) => A + P.Size, 0);
-console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen} -> ${Steps} SFT steps`);
+console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${Steps} SFT steps`);
 
 // 5) SFT loop: masked forward/backward over a batch, divide accumulated grad by batch, clip, step.
-const DbUrl = process.env["DATABASE_URL"];
-const CkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckpointStore(DbUrl) : null;
+// (CkptStore was opened above for resume detection; reused here for periodic + final saves.)
 const GlobalStart = Date.now();
 const Stride = Math.max(1, Math.floor(Steps / 200));
 function BuildAt(Step: number): Checkpoint {
   return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: Steps, Step, Corpus: "sft-owned", Format: "chat" }, { Kind: "Bpe", Merges: Bpe.Merges, Specials });
 }
 const CheckEvery = Math.max(50, Math.floor(Steps / 20));
-for (let Step = 0; Step < Steps; Step++) {
+for (let Step = StartStep; Step < Steps; Step++) {
   const CurrentLr = ComputeLr(Step, Config);
   Optimizer.ZeroGrad();
   let Loss = 0;
