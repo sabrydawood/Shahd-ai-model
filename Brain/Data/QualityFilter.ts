@@ -10,7 +10,15 @@ export type QualityOptions = {
   MinPrintableFraction?: number; // guards against binary/base64 blobs
   MinAlphaFraction?: number; // guards against near-empty / symbol soup
   Threshold?: number; // pass if Score >= Threshold
+  Prose?: boolean; // natural-language text (dialogue/articles): skip the code-only line-length checks
 };
+
+/** Prose (conversation / articles / books): natural language whose paragraphs are legitimately long,
+ *  so the code-minification line-length heuristics do NOT apply. Keeps only the empty/binary/symbol
+ *  guards. Use this for curated text sources; ScoreCodeQuality (line-length aware) is for source code. */
+export function ScoreTextQuality(Text: string, Options: QualityOptions = {}): QualityResult {
+  return ScoreCodeQuality(Text, { ...Options, Prose: true });
+}
 
 export function ScoreCodeQuality(Text: string, Options: QualityOptions = {}): QualityResult {
   const MaxAvgLineLength = Options.MaxAvgLineLength ?? 120;
@@ -28,17 +36,21 @@ export function ScoreCodeQuality(Text: string, Options: QualityOptions = {}): Qu
     return { Score: 0, Passed: false, Reasons: ["empty"] };
   }
 
-  const AvgLineLength = Text.length / Lines.length;
-  if (AvgLineLength > MaxAvgLineLength) {
-    Score -= 0.4;
-    Reasons.push(`avg line length ${AvgLineLength.toFixed(0)} > ${MaxAvgLineLength} (minified?)`);
-  }
+  // Line-length signals detect MINIFIED/generated CODE — they do not apply to prose (a paragraph is
+  // one long line by design), so Prose text skips them and is judged on content, not layout.
+  if (!Options.Prose) {
+    const AvgLineLength = Text.length / Lines.length;
+    if (AvgLineLength > MaxAvgLineLength) {
+      Score -= 0.4;
+      Reasons.push(`avg line length ${AvgLineLength.toFixed(0)} > ${MaxAvgLineLength} (minified?)`);
+    }
 
-  const LongLines = Lines.filter((L) => L.length > 400).length;
-  const LongFraction = LongLines / Lines.length;
-  if (LongFraction > MaxLongLineFraction) {
-    Score -= 0.3;
-    Reasons.push(`long-line fraction ${LongFraction.toFixed(2)} > ${MaxLongLineFraction}`);
+    const LongLines = Lines.filter((L) => L.length > 400).length;
+    const LongFraction = LongLines / Lines.length;
+    if (LongFraction > MaxLongLineFraction) {
+      Score -= 0.3;
+      Reasons.push(`long-line fraction ${LongFraction.toFixed(2)} > ${MaxLongLineFraction}`);
+    }
   }
 
   let Printable = 0;

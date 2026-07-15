@@ -6,13 +6,15 @@
 //   otherwise    -> Filtered (permissive + clean, eligible for training).
 
 import { IsPermissive } from "../Brain/Data/LicenseManifest.ts";
-import { ScoreCodeQuality } from "../Brain/Data/QualityFilter.ts";
+import { ScoreCodeQuality, ScoreTextQuality } from "../Brain/Data/QualityFilter.ts";
 import type { Tier, Origin } from "./DocumentRecord.ts";
 
 export type TierDecision = { Tier: Tier; QualityScore: number; RejectReason: string | null };
 
 export function ClassifyDocument(License: string, Content: string, Origin: Origin): TierDecision {
-  const Quality = ScoreCodeQuality(Content);
+  // curated sources (OASST / Wikipedia / books) are natural-language PROSE — score them as text so the
+  // code-minification line-length heuristics don't wrongly reject detailed (long-line) dialogue/articles.
+  const Quality = Origin === "curated" ? ScoreTextQuality(Content) : ScoreCodeQuality(Content);
   if (Origin === "web-general") {
     return { Tier: "Raw", QualityScore: Quality.Score, RejectReason: "general web: isolated for inspection, not training-eligible" };
   }

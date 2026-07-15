@@ -92,12 +92,19 @@ function ToNum(Value: unknown, Default: number): number {
   return Number.isFinite(N) ? N : Default;
 }
 
+function IsLearnSource(Value: unknown): Value is LearnSettings["Source"] {
+  return Value === "github" || Value === "local" || Value === "both" || Value === "oasst" || Value === "oasst2" || Value === "wikipedia";
+}
+
 function ParseSettings(Body: Record<string, unknown>): LearnSettings {
   const Source = Body["Source"];
   const Level = Body["MinLevel"];
   const Repos = Body["Repos"];
   return {
-    Source: Source === "local" || Source === "both" ? Source : "github",
+    // Accept EVERY valid source (github/local/both + the general text sources oasst/oasst2/wikipedia);
+    // anything unknown falls back to github. The old check listed only local/both, so it silently
+    // coerced oasst/oasst2/wikipedia to github — the "I picked OASST but it crawled GitHub" bug.
+    Source: IsLearnSource(Source) ? Source : "github",
     Query: typeof Body["Query"] === "string" ? Body["Query"] : "language:typescript stars:>1000",
     Repos: Array.isArray(Repos) ? Repos.map(String) : ["."],
     MinLevel: (Level === "high" || Level === "low" ? Level : "medium") as RepoLevel,

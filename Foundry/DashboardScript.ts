@@ -15,11 +15,13 @@ export const DashboardScript = `
  var pillKind=function(k){return '<span class="pill '+H(k)+'">'+H(k)+'</span>';};
 
  var WS=null, loadedName='', collecting=false, training=false, checkpoints=[], kindStats=[], lastSystem=null, lossHistory=[], trainStart=0;
- var chConv=null, chStreaming=false, chBubble=null;
+ var chConv=null, chStreaming=false, chBubble=null, chGotTrace=false;
  var LANGS={oasst:[['all','All languages'],['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['zh','Chinese']],
             wiki:[['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['ja','Japanese']]};
- // MODEL-SCALING §1 presets: Embed, Layers, Heads, Context, Vocab, Batch, Steps.
- var PRESETS={Seed:[96,3,4,96,512,16,6000],Nano:[128,4,4,256,512,16,5000],Micro:[256,6,4,512,1024,16,16000],Mini:[512,8,8,1024,4096,32,22000],Small:[768,12,12,2048,16384,64,19000],Base:[1024,24,16,4096,32000,128,17000],Large:[2048,32,32,8192,50000,256,22000]};
+ // MODEL-SCALING presets — a COMPLETE one-click config: [Embed,Layers,Heads,Context,Vocab,Batch,
+ // Steps, CodeMb,KnowledgeMb (pretrain mix), ConvCount,CodeSamples (chat mix)]. So picking a tier fills
+ // the architecture AND the data mix for both modes; adjust any field after.
+ var PRESETS={Seed:[96,3,4,96,512,16,6000,2,0,3000,2000],Nano:[128,4,4,256,512,16,5000,3,0,6000,3000],Micro:[256,6,4,512,1024,16,16000,8,0,20000,8000],Mini:[512,8,8,1024,4096,32,22000,30,0,100000,30000],Small:[768,12,12,2048,16384,64,19000,80,0,300000,80000],Base:[1024,24,16,4096,32000,128,17000,200,0,500000,150000],Large:[2048,32,32,8192,50000,256,22000,500,0,1000000,300000]};
 
  // ── theme ──
  function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('shahd.theme',t);}catch(e){}Q('themebtn').textContent=t==='dark'?'☀':'☾';}
@@ -144,7 +146,7 @@ export const DashboardScript = `
  // ── Train ──
  var tMode='pretrain';
  function setMode(m){tMode=m;Q('t-mode-pre').classList.toggle('on',m==='pretrain');Q('t-mode-chat').classList.toggle('on',m==='chat');Q('t-mix-pretrain').style.display=m==='pretrain'?'':'none';Q('t-mix-chat').style.display=m==='chat'?'':'none';}
- function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];}
+ function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];Q('t-corpus').value=p[7];Q('t-know').value=p[8];Q('t-conv').value=p[9];Q('t-code').value=p[10];}
  function renderResumeOptions(){var sel=Q('t-resume');var cur=sel.value;
   sel.innerHTML='<option value="">◇ New model</option>'+checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">↻ '+H(c.Name)+' ('+H(c.Format)+', step '+fmtN(c.Step)+')</option>';}).join('');
   sel.value=cur;}
@@ -204,16 +206,25 @@ export const DashboardScript = `
  function chModelOptions(){var sel=Q('ch-model');if(!sel)return;var cur=sel.value||loadedName;
   if(!checkpoints.length){sel.innerHTML='<option value="">(no saved models — train one first)</option>';return;}
   sel.innerHTML=checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">'+H(c.Name)+' — '+fmtP(c.Params)+' · '+H(c.Format)+'</option>';}).join('');if(cur)sel.value=cur;}
- function chInit(){chModelOptions();if(!chConv)chNew();}
+ function chInit(){chModelOptions();chLoadHistory();if(!chConv)chNew();}
  function chPick(name){if(name&&wsReady()){WS.send(JSON.stringify({type:'load-model',name:name}));Q('ch-stat').textContent='loading '+name+'…';}}
  function chBubbleEl(role,text,cls){var d=document.createElement('div');d.className='bub '+(cls||role);d.innerHTML='<div class="who">'+H(role)+'</div>';var t=document.createElement('div');t.textContent=text;d.appendChild(t);var box=Q('ch-bubbles');box.appendChild(d);box.scrollTop=box.scrollHeight;return {wrap:d,txt:t};}
- function chNew(){chConv=uuid();Q('ch-bubbles').innerHTML='<div class="empty">say something to test the model</div>';Q('ch-trace').innerHTML='<div class="empty">the model steps (think → tool → answer) appear here after a reply</div>';Q('ch-stat').textContent='';}
+ function chNew(){chConv=uuid();Q('ch-bubbles').innerHTML='<div class="empty">say something to test the model</div>';Q('ch-trace').innerHTML='<div class="empty">the model steps (think → tool → answer) appear here after a reply</div>';Q('ch-stat').textContent='';var h=Q('ch-history');if(h)h.value='';}
+ async function chLoadHistory(){try{var list=await (await fetch('/api/chat/conversations')).json();var sel=Q('ch-history');if(!sel)return;sel.innerHTML='<option value="">— '+list.length+' past chats —</option>'+list.map(function(c){return '<option value="'+H(c.Id)+'">'+H(c.Title)+'</option>';}).join('');if(chConv)sel.value=chConv;}catch(e){}}
+ async function chOpen(id){if(!id||chStreaming)return;chConv=id;
+  try{var msgs=await (await fetch('/api/chat/conversation?id='+encodeURIComponent(id))).json();Q('ch-bubbles').innerHTML='';
+   if(!msgs.length)Q('ch-bubbles').innerHTML='<div class="empty">empty conversation</div>';
+   else msgs.forEach(function(m){chBubbleEl(m.Role==='assistant'?'model':'you',m.Content,m.Role==='assistant'?'model':'u');});
+  }catch(e){Q('ch-bubbles').innerHTML='<div class="empty">failed to load</div>';}
+  Q('ch-trace').innerHTML='<div class="empty">the reasoning trace shows for the NEXT reply</div>';}
+ async function chDelCur(){if(!chConv)return;if(!confirm('Delete this conversation permanently?'))return;
+  await fetch('/api/chat/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:chConv})});chNew();chLoadHistory();}
  function chTrace(lines){var el=Q('ch-trace');if(!el)return;if(!lines||!lines.length){el.innerHTML='<div class="empty">no tool/think steps — the model replied directly</div>';return;}
   el.innerHTML=lines.map(function(L){var k=(L.Kind==='think'||L.Kind==='tool'||L.Kind==='answer')?L.Kind:'answer';var txt=H(L.Text)+(L.Detail?' <span class="dt">→ '+H(L.Detail)+'</span>':'');return '<div class="step"><span class="b '+k+'">'+k+'</span><span class="x">'+txt+'</span></div>';}).join('');}
  function chSend(){var box=Q('ch-box'),text=box.value.trim();if(!text||chStreaming)return;if(!wsReady())return;if(!loadedName){Q('ch-stat').textContent='load a model first (pick one above)';return;}if(!chConv)chConv=uuid();
   var em=Q('ch-bubbles').querySelector('.empty');if(em)Q('ch-bubbles').innerHTML='';
   box.value='';chBubbleEl('you',text,'u');chBubble=chBubbleEl('model','','');chBubble.wrap.classList.add('cursor');
-  chStreaming=true;Q('ch-send').disabled=true;var mx=Math.max(1,Math.min(4096,+Q('ch-max').value||512));Q('ch-stat').textContent='generating (max '+mx+' tokens)…';Q('ch-trace').innerHTML='<div class="empty">reasoning…</div>';
+  chStreaming=true;chGotTrace=false;Q('ch-send').disabled=true;var mx=Math.max(1,Math.min(4096,+Q('ch-max').value||512));Q('ch-stat').textContent='generating (max '+mx+' tokens)…';Q('ch-trace').innerHTML='<div class="empty">reasoning…</div>';
   WS.send(JSON.stringify({type:'chat',convId:chConv,message:text,temperature:+Q('ch-temp').value,maxTokens:mx}));}
  function chEnd(){chStreaming=false;Q('ch-send').disabled=false;if(chBubble)chBubble.wrap.classList.remove('cursor');chBubble=null;Q('ch-box').focus();}
 
@@ -238,8 +249,8 @@ export const DashboardScript = `
    else if(m.type==='learn')onLearn(m.event);
    else if(m.type==='train')onTrain(m.event);
    else if(m.type==='chat-delta'&&m.convId===chConv&&chBubble){chBubble.txt.textContent+=m.delta;var cb=Q('ch-bubbles');cb.scrollTop=cb.scrollHeight;}
-   else if(m.type==='chat-trace'&&m.convId===chConv)chTrace(m.lines);
-   else if(m.type==='chat-done'&&m.convId===chConv){Q('ch-stat').textContent='';chEnd();}
+   else if(m.type==='chat-trace'&&m.convId===chConv){chGotTrace=true;chTrace(m.lines);}
+   else if(m.type==='chat-done'&&m.convId===chConv){Q('ch-stat').textContent='';if(!chGotTrace)Q('ch-trace').innerHTML='<div class="empty">this is a BASE model — it replies directly, with no think/tool steps. Train a Chat/SFT model (Train ▸ Chat) to see the reasoning trace.</div>';chEnd();chLoadHistory();}
    else if(m.type==='chat-error'&&m.convId===chConv){if(chBubble){chBubble.wrap.className='bub err';chBubble.txt.textContent='error: '+m.error;}Q('ch-stat').textContent='';chEnd();}
   };}
 

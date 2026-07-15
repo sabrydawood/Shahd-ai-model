@@ -139,11 +139,14 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
    <section class="view" id="view-chat">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
      <label class="f" style="margin:0">Model</label>
-     <select class="i" style="width:auto;min-width:240px" id="ch-model" onchange="chPick(this.value)"><option value="">(no model)</option></select>
+     <select class="i" style="width:auto;min-width:220px" id="ch-model" onchange="chPick(this.value)"><option value="">(no model)</option></select>
+     <label class="f" style="margin:0">Chat</label>
+     <select class="i" style="width:auto;min-width:190px" id="ch-history" onchange="chOpen(this.value)" title="past conversations"><option value="">— history —</option></select>
      <span class="spacer"></span>
-     <label class="f" style="margin:0">temp</label><input class="i tnum" style="width:66px" id="ch-temp" type="number" step="0.1" min="0" max="2" value="0.8">
-     <label class="f" style="margin:0">max tokens</label><input class="i tnum" style="width:88px" id="ch-max" type="number" min="1" max="4096" value="512">
+     <label class="f" style="margin:0">temp</label><input class="i tnum" style="width:62px" id="ch-temp" type="number" step="0.1" min="0" max="2" value="0.8">
+     <label class="f" style="margin:0">max</label><input class="i tnum" style="width:80px" id="ch-max" type="number" min="1" max="4096" value="512">
      <button class="btn sm" onclick="chNew()">+ New</button>
+     <button class="btn sm danger" onclick="chDelCur()" title="delete this conversation">Delete</button>
      <a class="btn sm" href="/chat" target="_blank" style="text-decoration:none">Full page ↗</a>
     </div>
     <div class="warnbar">⚠ Tiny from-scratch model — replies are experimental and often incoherent. The value here is the serving path + the visible reasoning trace, not fluency.</div>
