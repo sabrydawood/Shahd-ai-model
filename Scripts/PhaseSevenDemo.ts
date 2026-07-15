@@ -17,8 +17,8 @@ import { CharTokenizer } from "../Brain/Tokenizer/CharTokenizer.ts";
 import { TrainValSplit } from "../Brain/Data/TrainValSplit.ts";
 import { InMemoryDataLoader } from "../Brain/Data/DataLoader.ts";
 import { Shahd } from "../Brain/Nn/Shahd.ts";
-import { CreateOptimizer, ClipGradGlobalNorm, ComputeLr } from "../Brain/Optim/OptimBarrel.ts";
-import { AccumulateGradients } from "../Brain/Training/GradAccumulation.ts";
+import { CreateOptimizer } from "../Brain/Optim/OptimBarrel.ts";
+import { RunTrainingSteps } from "../Brain/Training/RunTrainingSteps.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { SpeculativeDecodeGreedy, SplitThinking, WrapThinking } from "../Brain/Reasoning/ReasoningBarrel.ts";
 import { SafetyPolicy } from "../Brain/Safety/SafetyPolicy.ts";
@@ -50,11 +50,7 @@ const Model = new Shahd(Config, Rng.InitRng);
 const Optimizer = CreateOptimizer(Model.Parameters(), Config);
 
 console.log(`[1] Corpus: kept ${Built.Stats.Kept}/${Built.Stats.Input} docs (dropped GPL=${Built.Stats.DroppedNonPermissive}, minified=${Built.Stats.DroppedLowQuality}, dup=${Built.Stats.DroppedNearDuplicate}). Training modern-stack model...`);
-for (let Step = 0; Step < Config.Schedule.MaxSteps; Step++) {
-  AccumulateGradients(Model, Optimizer, Loader, Config.Training.BatchSize);
-  ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
-  Optimizer.Step(ComputeLr(Step, Config));
-}
+RunTrainingSteps(Model, Optimizer, Loader, Config);
 console.log(`    sample: ${JSON.stringify(Tokenizer.Decode(Generate(Model, Tokenizer.Encode("export function "), 60, { Temperature: 0.6, TopK: 0, TopP: 1 }, Rng.SamplingRng)).slice(0, 70))}`);
 
 // 2) Rich tool agent — registry/context/budget built ENTIRELY from Config.Tools (the central gate).

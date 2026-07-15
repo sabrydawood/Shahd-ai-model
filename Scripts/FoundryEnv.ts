@@ -10,7 +10,7 @@ import { FoundryStores } from "../Foundry/FoundryStores.ts";
 import { ReadArg } from "./ScriptArgs.ts";
 
 export function DatabaseUrl(): string {
-  return process.env["DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/shahd";
+  return process.env["DATABASE_URL"] ?? "postgres://shahd:shahd@localhost:5432/shahd";
 }
 
 export function GitHubToken(): string | undefined {

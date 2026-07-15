@@ -7,7 +7,8 @@ const MaxLines = 600;
 
 const Violations: string[] = [];
 for (const File of WalkAllSourceFiles()) {
-  const LineCount = readFileSync(File, "utf8").split("\n").length;
+  const Content = readFileSync(File, "utf8");
+  const LineCount = Content.length === 0 ? 0 : Content.split("\n").length - (Content.endsWith("\n") ? 1 : 0);
   if (LineCount > MaxLines) {
     Violations.push(`  ${File}: ${LineCount} lines (max ${MaxLines})`);
   }

@@ -19,6 +19,7 @@ import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SaveCheckpoint } from "../Brain/Checkpoint/CheckpointWriter.ts";
 import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
+import { ReadArg } from "./ScriptArgs.ts";
 
 const SampleCode = `function add(a, b) {
   return a + b;
@@ -39,13 +40,8 @@ console.log(sum, doubled);
 `;
 
 function ReadCorpus(): string {
-  for (const Arg of process.argv.slice(2)) {
-    const CorpusArg = Arg?.startsWith("--Corpus=") ? "--Corpus=" : Arg?.startsWith("-c=") ? "-c=" : null;
-    if (CorpusArg) {
-      const Path = Arg.slice(CorpusArg.length);
-      if (existsSync(Path)) return readFileSync(Path, "utf8");
-    }
-  }
+  const Path = ReadArg("--Corpus=", "");
+  if (Path !== "" && existsSync(Path)) return readFileSync(Path, "utf8");
   return SampleCode.repeat(8);
 }
 

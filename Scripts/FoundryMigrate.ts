@@ -5,7 +5,7 @@
 
 import postgres from "postgres";
 
-const Url = process.env["DATABASE_URL"] ?? "postgres://postgres:postgres@localhost:5432/shahd";
+const Url = process.env["DATABASE_URL"] ?? "postgres://shahd:shahd@localhost:5432/shahd";
 const Sql = postgres(Url);
 
 await Sql`

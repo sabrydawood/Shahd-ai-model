@@ -68,8 +68,8 @@ async function ReloadModel(Name: string = ModelHolder.Name): Promise<void> {
         ModelHolder.Source = `postgres:${Name}`;
         return;
       }
-    } catch {
-      // fall through to file
+    } catch (Caught) {
+      console.warn(`[dashboard] checkpoint load failed for "${Name}": ${(Caught as Error).message} - falling back to file`);
     }
   }
   const FilePath = process.env["FOUNDRY_CHECKPOINT"] ?? ReadArg("--Checkpoint=", "Checkpoints/Foundry.ckpt");
@@ -89,7 +89,8 @@ async function ListCheckpoints(): Promise<CheckpointSummary[]> {
   if (SharedCkptStore === null) return [];
   try {
     return await SharedCkptStore.List();
-  } catch {
+  } catch (Caught) {
+    console.warn(`[dashboard] checkpoint list failed: ${(Caught as Error).message}`);
     return [];
   }
 }
@@ -373,6 +374,28 @@ const ParseTrainLine = (Line: string, Settings: TrainSettings, OnEvent: (Event: 
   OnEvent({ kind: "train-info", text: Line });
 };
 
+// Pump a byte stream into whole trimmed lines (blank lines dropped) — shared by the stdout and
+// stderr readers below so both are consumed with identical buffering.
+async function PumpLines(Stream: ReadableStream<Uint8Array<ArrayBuffer>>, OnLine: (Line: string) => void): Promise<void> {
+  const Reader = Stream.getReader();
+  const Decoder = new TextDecoder();
+  let Buf = "";
+  for (;;) {
+    const { done: Done, value: Value } = await Reader.read();
+    if (Done) break;
+    if (Value !== undefined) {
+      Buf += Decoder.decode(Value, { stream: true });
+      let Idx = Buf.indexOf("\n");
+      while (Idx >= 0) {
+        const Line = Buf.slice(0, Idx).trim();
+        Buf = Buf.slice(Idx + 1);
+        if (Line !== "") OnLine(Line);
+        Idx = Buf.indexOf("\n");
+      }
+    }
+  }
+}
+
 const Train: TrainFn = async (Settings, OnEvent, Signal) => {
   // pretrain -> base model (TrainOnFoundry); chat -> SFT chat model (TrainSftChat). Both workers emit
   // the same {Step,TrainLoss,ElapsedMs} progress lines, so ParseTrainLine handles either identically.
@@ -395,23 +418,16 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
     }
   };
   Signal?.addEventListener("abort", OnAbort);
-  const Decoder = new TextDecoder();
-  let Buf = "";
-  const Reader = Proc.stdout.getReader();
-  for (;;) {
-    const { done: Done, value: Value } = await Reader.read();
-    if (Done) break;
-    if (Value !== undefined) {
-      Buf += Decoder.decode(Value, { stream: true });
-      let Idx = Buf.indexOf("\n");
-      while (Idx >= 0) {
-        const Line = Buf.slice(0, Idx).trim();
-        Buf = Buf.slice(Idx + 1);
-        if (Line !== "") ParseTrainLine(Line, Settings, OnEvent);
-        Idx = Buf.indexOf("\n");
-      }
-    }
-  }
+  // Consume stdout (progress lines) and stderr (crash/error output) CONCURRENTLY — an unread pipe
+  // fills its OS buffer and can stall the child, and a silently-dropped stderr hid the real error/
+  // stack trace behind "see server console". Stderr lines are logged AND surfaced to the dashboard.
+  await Promise.all([
+    PumpLines(Proc.stdout, (Line) => ParseTrainLine(Line, Settings, OnEvent)),
+    PumpLines(Proc.stderr, (Line) => {
+      console.error(`[train:stderr] ${Line}`);
+      OnEvent({ kind: "train-info", text: `[stderr] ${Line}` });
+    }),
+  ]);
   const Code = await Proc.exited;
   Signal?.removeEventListener("abort", OnAbort);
   if (Signal?.aborted === true) OnEvent({ kind: "train-error", message: "stopped by user — last saved checkpoint is kept; press Train to resume" });

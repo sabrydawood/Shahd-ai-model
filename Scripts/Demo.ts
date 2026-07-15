@@ -9,8 +9,8 @@ import { CharTokenizer } from "../Brain/Tokenizer/CharTokenizer.ts";
 import { TrainValSplit } from "../Brain/Data/TrainValSplit.ts";
 import { InMemoryDataLoader } from "../Brain/Data/DataLoader.ts";
 import { Shahd } from "../Brain/Nn/Shahd.ts";
-import { CreateOptimizer, ClipGradGlobalNorm, ComputeLr } from "../Brain/Optim/OptimBarrel.ts";
-import { AccumulateGradients } from "../Brain/Training/GradAccumulation.ts";
+import { CreateOptimizer } from "../Brain/Optim/OptimBarrel.ts";
+import { RunTrainingSteps } from "../Brain/Training/RunTrainingSteps.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SafetyPolicy } from "../Brain/Safety/SafetyPolicy.ts";
@@ -45,11 +45,7 @@ const Model = new Shahd(Config, Rng.InitRng);
 const Optimizer = CreateOptimizer(Model.Parameters(), Config);
 
 console.log("[1] Training modern-stack model (RoPE+RMSNorm+SwiGLU) from scratch...");
-for (let Step = 0; Step < Config.Schedule.MaxSteps; Step++) {
-  AccumulateGradients(Model, Optimizer, Loader, Config.Training.BatchSize);
-  ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
-  Optimizer.Step(ComputeLr(Step, Config));
-}
+RunTrainingSteps(Model, Optimizer, Loader, Config);
 const Sample = Generate(Model, Tokenizer.Encode("function "), 100, { ...DefaultSampling, Temperature: 0.7 }, Rng.SamplingRng);
 console.log("    sample:", JSON.stringify(Tokenizer.Decode(Sample).slice(0, 90)));
 
