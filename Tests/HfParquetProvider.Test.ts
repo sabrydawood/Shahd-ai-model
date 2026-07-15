@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { CreateHfParquetProvider, WikiDumpSource } from "../Foundry/HfParquetProvider.ts";
-import type { ParquetRow, SourceInput } from "../Foundry/FoundryBarrel.ts";
+import type { ParquetRow, SourceInput, AsyncBuffer } from "../Foundry/FoundryBarrel.ts";
 
 // A fake shard row; ReadRows slices an array of these like hyparquet's rowStart/rowEnd would.
 const Row = (I: number): ParquetRow => ({ id: I, title: `Title ${I}`, text: "A long enough article body sentence. ".repeat(10) });
@@ -20,7 +20,7 @@ test("parquet provider streams a full shard and advances the cursor to the next 
   const Batches: SourceInput[] = [];
   const Provider = CreateHfParquetProvider(WikiDumpSource, {
     ListShards: async () => ["s0"],
-    FetchShard: async () => new ArrayBuffer(8),
+    OpenShard: async () => ({ byteLength: 8, slice: async () => new ArrayBuffer(8) }),
     ReadRows: async (_F, Start, End) => Shards[0]!.slice(Start, End),
     WindowRows: 2,
     OnCursor: (Shard, Offset) => Cursors.push({ Shard, Offset }),
@@ -34,12 +34,12 @@ test("parquet provider streams a full shard and advances the cursor to the next 
 
 test("parquet provider resumes from a cursor and caps mid-shard without skipping rows", async () => {
   const Data = Array.from({ length: 10 }, (_, I) => Row(I));
-  const Read = async (_F: ArrayBuffer, Start: number, End: number): Promise<ParquetRow[]> => Data.slice(Start, End);
+  const Read = async (_F: AsyncBuffer, Start: number, End: number): Promise<ParquetRow[]> => Data.slice(Start, End);
   const Cursors: { Shard: number; Offset: number }[] = [];
   const Batches: SourceInput[] = [];
   const Provider = CreateHfParquetProvider(WikiDumpSource, {
     ListShards: async () => ["s0"],
-    FetchShard: async () => new ArrayBuffer(8),
+    OpenShard: async () => ({ byteLength: 8, slice: async () => new ArrayBuffer(8) }),
     ReadRows: Read,
     WindowRows: 2,
     StartOffset: 4, // resume mid-shard
@@ -58,7 +58,7 @@ test("parquet provider stops cleanly when the cursor is past the last shard", as
   const Cursors: { Shard: number; Offset: number }[] = [];
   const Provider = CreateHfParquetProvider(WikiDumpSource, {
     ListShards: async () => ["s0", "s1"],
-    FetchShard: async () => { throw new Error("should not download"); },
+    OpenShard: async () => { throw new Error("should not download"); },
     ReadRows: async () => [],
     StartShard: 2, // past the end
     OnCursor: (Shard, Offset) => Cursors.push({ Shard, Offset }),

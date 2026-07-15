@@ -3,13 +3,15 @@
 // datasets-server /rows JSON API is unreachable from here, but the parquet FILES download fine via
 // resolve/main, and hyparquet + hyparquet-compressors decode them (verified: codec is not a blocker).
 //
-// A dataset's shards are discovered from the HF tree API, then downloaded ONE per run (whole file — the
-// user chose whole-shard over byte-range for now) and decoded in row windows so memory stays bounded to
-// the shard buffer + one window. A {Shard, Offset} cursor (persisted in collection_state) makes runs
-// resume across shards — the first real use of that Phase-1 cursor. download/decode/list are injected so
-// the provider is testable with plain data (no network, no real parquet).
+// A dataset's shards are discovered from the HF tree API, then read via HTTP RANGE requests: hyparquet's
+// asyncBufferFromUrl fetches only the parquet footer plus the row groups a window actually needs, so a
+// run downloads a few MB — not the whole 157 MB shard (verified: 5 rows decoded from 2.8 MB in 3s). This
+// also sidesteps the xethub CDN dropping long transfers (small requests rarely ECONNRESET). Rows are read
+// in windows so memory stays bounded; a {Shard, Offset} cursor (persisted in collection_state) resumes
+// across shards — the first real use of that Phase-1 cursor. open/decode/list are injected so the
+// provider is testable with plain data (no network, no real parquet).
 
-import { parquetReadObjects } from "hyparquet";
+import { parquetReadObjects, asyncBufferFromUrl, cachedAsyncBuffer } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
 import type { WebProvider, RepoSink } from "./WebSource.ts";
 import type { SourceInput } from "./Ingest.ts";
@@ -17,6 +19,15 @@ import type { DataKind } from "./DataKinds.ts";
 import { FetchWithBackoff, HttpError } from "./HttpBackoff.ts";
 
 export type ParquetRow = Record<string, unknown>;
+
+// What hyparquet reads THROUGH: a total size plus a slice(start,end) that fetches only that byte range
+// (an HTTP Range request for the URL case). This is how a shard is read without downloading all of it.
+export type AsyncBuffer = {
+  byteLength: number;
+  // `slice` is hyparquet's AsyncBuffer contract (external API), so it cannot be PascalCase.
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  slice: (Start: number, End?: number) => Promise<ArrayBuffer> | ArrayBuffer;
+};
 
 // One HF parquet dataset the provider can collect. ConfigFor turns the run's Query (e.g. a Wikipedia
 // language) into the HF config directory; MapRow turns a decoded row into a document body (or null to
@@ -37,8 +48,8 @@ export type HfParquetOptions = {
   WindowRows?: number; // rows decoded per hyparquet call (memory vs. call-count trade-off)
   BatchSize?: number;
   ListShards?: (Dataset: string, Config: string) => Promise<string[]>; // injected in tests
-  FetchShard?: (Url: string) => Promise<ArrayBuffer>; // injected in tests
-  ReadRows?: (File: ArrayBuffer, Start: number, End: number) => Promise<ParquetRow[]>; // injected in tests
+  OpenShard?: (Url: string) => Promise<AsyncBuffer>; // injected in tests; range-backed reader by default
+  ReadRows?: (File: AsyncBuffer, Start: number, End: number) => Promise<ParquetRow[]>; // injected in tests
   OnCursor?: (Shard: number, Offset: number) => void; // report progress so the caller can persist it
   Sleep?: (Ms: number) => Promise<void>;
   OnRepoStart?: (Name: string) => void;
@@ -65,22 +76,15 @@ async function DefaultListShards(Dataset: string, Config: string, Sleep?: (Ms: n
     .map((Path) => `${HfBase}/datasets/${Dataset}/resolve/main/${Path}`);
 }
 
-async function DefaultFetchShard(Url: string, Sleep?: (Ms: number) => Promise<void>): Promise<ArrayBuffer> {
-  // A parquet shard is large (100s of MB) and HF's xethub CDN intermittently drops a long transfer
-  // mid-stream (ECONNRESET) — the transfer is fine, the connection just blips. Retry generously on a
-  // fresh connection (6 attempts); a real HTTP status error still fails fast. Byte-range reads (a later
-  // optimization) are the structural fix — smaller requests are far less likely to drop.
-  return FetchWithBackoff(
-    async () => {
-      const Response = await fetch(Url, { headers: { "User-Agent": "shahd-foundry" } }); // follows the HF 302
-      if (!Response.ok) throw new HttpError(Response.status);
-      return Response.arrayBuffer();
-    },
-    { Sleep, MaxAttempts: 6, BaseDelayMs: 1000 },
-  );
+// Open a shard for RANGE reads: asyncBufferFromUrl does a HEAD for the size, then each slice() is an HTTP
+// Range request (only the bytes hyparquet asks for). cachedAsyncBuffer memoizes fetched ranges so reading
+// several windows out of the same row group doesn't re-download it. The whole 157 MB is never pulled.
+async function DefaultOpenShard(Url: string): Promise<AsyncBuffer> {
+  const Buffer = await asyncBufferFromUrl({ url: Url, requestInit: { headers: { "User-Agent": "shahd-foundry" } } });
+  return cachedAsyncBuffer(Buffer) as AsyncBuffer;
 }
 
-async function DefaultReadRows(File: ArrayBuffer, Start: number, End: number): Promise<ParquetRow[]> {
+async function DefaultReadRows(File: AsyncBuffer, Start: number, End: number): Promise<ParquetRow[]> {
   return parquetReadObjects({ file: File, compressors, rowStart: Start, rowEnd: End });
 }
 
@@ -89,7 +93,7 @@ export function CreateHfParquetProvider(Source: HfParquetSource, Options: HfParq
   const Window = Options.WindowRows ?? 1000;
   const BatchSize = Options.BatchSize ?? 500;
   const ListShards = Options.ListShards ?? ((D: string, C: string): Promise<string[]> => DefaultListShards(D, C, Options.Sleep));
-  const FetchShard = Options.FetchShard ?? ((U: string): Promise<ArrayBuffer> => DefaultFetchShard(U, Options.Sleep));
+  const OpenShard = Options.OpenShard ?? DefaultOpenShard;
   const ReadRows = Options.ReadRows ?? DefaultReadRows;
   const Log = Options.Log ?? ((Message: string): void => console.log(Message));
 
@@ -113,8 +117,8 @@ export function CreateHfParquetProvider(Source: HfParquetSource, Options: HfParq
       }
 
       Options.OnRepoStart?.(`${Source.Name} shard ${Shard + 1}/${Shards.length}`);
-      Log(`[${Source.Name}] downloading shard ${Shard + 1}/${Shards.length} (whole file)…`);
-      const File = await FetchShard(Shards[Shard]!);
+      Log(`[${Source.Name}] opening shard ${Shard + 1}/${Shards.length} (range reads)…`);
+      const File = await OpenShard(Shards[Shard]!);
 
       let Batch: SourceInput[] = [];
       let Collected = 0;
