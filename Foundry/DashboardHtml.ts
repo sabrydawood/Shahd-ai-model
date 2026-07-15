@@ -63,7 +63,7 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
     <div class="card" style="margin-bottom:14px">
      <div class="row c3">
       <div id="c-genbox" style="display:none"><label class="f">Language to collect</label><select class="i" id="c-lang"></select></div>
-      <div id="c-ghbox"><label class="f">GitHub query</label><input class="i" id="c-query" value="stars:>1000 language:typescript"></div>
+      <div id="c-ghbox"><label class="f">GitHub query <span style="color:var(--faint);font-weight:400">— use ; for several (each grows the corpus)</span></label><input class="i" id="c-query" value="stars:>1000 language:typescript"></div>
       <div id="c-localbox" style="display:none"><label class="f">Local repo paths (comma-separated)</label><input class="i" id="c-repos" value="."></div>
       <div><label class="f" id="c-maxlabel">Max repos</label><input class="i tnum" id="c-maxrepos" type="number" value="5"></div>
       <div id="c-levelbox"><label class="f">Min level</label><select class="i" id="c-minlevel"><option>medium</option><option>high</option><option>low</option></select></div>

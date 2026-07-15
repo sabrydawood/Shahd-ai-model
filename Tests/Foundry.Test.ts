@@ -74,8 +74,12 @@ test("quality report aggregates tiers, licenses, and langs", async () => {
 test("dedup by content hash: re-ingesting identical content does not duplicate", async () => {
   const Store = new InMemoryDocumentStore();
   const One: SourceInput = { Source: "s", License: "MIT", Lang: "ts", Content: Clean, Provenance: "a.ts", Origin: "local" };
-  await IngestDocuments([One, One], Store, "2026-07-13T00:00:00.000Z");
+  const Stats = await IngestDocuments([One, One], Store, "2026-07-13T00:00:00.000Z");
   expect(await Store.Count()).toBe(1);
+  // Honest accounting: the first is a NEW row, the second is a content-hash duplicate — not fresh data.
+  expect(Stats.New).toBe(1);
+  expect(Stats.Duplicate).toBe(1);
+  expect(Stats.Ingested).toBe(2); // Ingested stays New + Duplicate (successful upserts) for back-compat
 });
 
 test("ingest is resilient: one failing Upsert doesn't abort the batch", async () => {
@@ -83,10 +87,10 @@ test("ingest is resilient: one failing Upsert doesn't abort the batch", async ()
   // continue and report the failure, not throw and lose the other rows.
   class FlakyStore extends InMemoryDocumentStore {
     Calls = 0;
-    override async Upsert(Doc: DocumentRecord): Promise<void> {
+    override async Upsert(Doc: DocumentRecord): Promise<boolean> {
       this.Calls++;
       if (this.Calls === 2) throw new Error("simulated store failure");
-      await super.Upsert(Doc);
+      return super.Upsert(Doc);
     }
   }
   const Store = new FlakyStore();

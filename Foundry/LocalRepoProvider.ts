@@ -72,6 +72,7 @@ export function CreateLocalRepoProvider(Options: LocalRepoOptions): WebProvider 
   const MaxContentBytes = Options.MaxContentBytes ?? DefaultRepoLimits.MaxContentBytes;
   return {
     Name: "local-repo",
+    Semantics: "bounded", // a fixed set of on-disk repos — a full collect exhausts it
     Fetch: async (): Promise<SourceInput[]> => {
       const Out: SourceInput[] = [];
       for (const Root of Options.Roots) {

@@ -20,7 +20,10 @@ export type SourceInput = {
   Origin: Origin;
 };
 
-export type IngestStats = { Ingested: number; ByTier: Record<Tier, number>; Failed: number };
+// Ingested = successful upserts (New + Duplicate) — kept for back-compat. New = rows that did not
+// already exist; Duplicate = content-hash dedup hits (re-ingesting the same bytes). Reporting New vs
+// Duplicate is what stops the "ingested 14355 again!" illusion when a bounded source is re-collected.
+export type IngestStats = { Ingested: number; New: number; Duplicate: number; ByTier: Record<Tier, number>; Failed: number };
 
 export async function IngestDocuments(
   Inputs: SourceInput[],
@@ -31,6 +34,8 @@ export async function IngestDocuments(
 ): Promise<IngestStats> {
   const ByTier: Record<Tier, number> = { Filtered: 0, Raw: 0, Rejected: 0 };
   let Ingested = 0;
+  let New = 0;
+  let Duplicate = 0;
   let Failed = 0;
   let Done = 0;
   for (const Input of Inputs) {
@@ -61,9 +66,11 @@ export async function IngestDocuments(
     };
     // One bad row must not abort a whole multi-repo Learn run: log and continue.
     try {
-      await Store.Upsert(Record);
+      const Inserted = await Store.Upsert(Record);
       ByTier[Decision.Tier]++;
       Ingested++;
+      if (Inserted) New++;
+      else Duplicate++;
     } catch (Caught) {
       Failed++;
       console.warn(`IngestDocuments: skipped ${Input.Provenance}: ${(Caught as Error).message}`);
@@ -71,7 +78,7 @@ export async function IngestDocuments(
     Done++;
     OnEach?.(Done, Inputs.length, Input.Provenance);
   }
-  return { Ingested, ByTier, Failed };
+  return { Ingested, New, Duplicate, ByTier, Failed };
 }
 
 /** Materialize the training-eligible (Filtered) tier as one training-ready text blob. */

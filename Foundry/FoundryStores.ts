@@ -9,6 +9,8 @@ import { DataKinds, TableForKind } from "./DataKinds.ts";
 import type { DataKind } from "./DataKinds.ts";
 import { PostgresDocumentStore } from "./PostgresDocumentStore.ts";
 import type { DocumentStore } from "./DocumentStore.ts";
+import { PostgresCollectionStateStore } from "./PostgresCollectionStateStore.ts";
+import type { CollectionStateStore } from "./CollectionState.ts";
 
 // Per-kind rollup for the dashboard: total docs, the per-tier split (so the Overview cards can sum an
 // accurate cross-kind "trainable"/"rejected" instead of the code-only /api/stats), and trainable bytes.
@@ -17,9 +19,16 @@ export type KindStat = { Kind: DataKind; Count: number; Filtered: number; Reject
 export class FoundryStores {
   private Sql: ReturnType<typeof postgres>;
   private Stores = new Map<DataKind, PostgresDocumentStore>();
+  private CollectionStore: PostgresCollectionStateStore | null = null;
 
   constructor(Url: string) {
     this.Sql = postgres(Url);
+  }
+
+  /** The collection ledger (progress/exhausted per source), lazily created on the SAME shared pool. */
+  CollectionState(): CollectionStateStore {
+    if (this.CollectionStore === null) this.CollectionStore = new PostgresCollectionStateStore(this.Sql);
+    return this.CollectionStore;
   }
 
   /** The store for one kind (its own documents_<kind> table), created lazily on the shared connection. */

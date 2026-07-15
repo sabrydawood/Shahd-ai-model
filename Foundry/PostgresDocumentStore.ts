@@ -67,9 +67,18 @@ export class PostgresDocumentStore implements DocumentStore {
     this.Table = DocumentsTable(TableName);
   }
 
-  async Upsert(Doc: DocumentRecord): Promise<void> {
+  async Upsert(Doc: DocumentRecord): Promise<boolean> {
     const Row = ToRow(Doc);
-    await this.Db.insert(this.Table).values(Row).onConflictDoUpdate({ target: this.Table.id, set: Row });
+    // Keep upsert (DoUpdate) semantics — RetierProse/backfill rely on updating an existing row — but
+    // report whether this was an INSERT or an update. Postgres exposes that in RETURNING via the
+    // system column xmax: it is 0 for a freshly inserted tuple and non-zero for one updated by the
+    // ON CONFLICT path. So `xmax = 0` is exactly "was this new?".
+    const Returned = await this.Db
+      .insert(this.Table)
+      .values(Row)
+      .onConflictDoUpdate({ target: this.Table.id, set: Row })
+      .returning({ Inserted: sql<boolean>`(xmax = 0)` });
+    return Returned[0]?.Inserted === true;
   }
 
   async All(): Promise<DocumentRecord[]> {

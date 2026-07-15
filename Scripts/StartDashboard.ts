@@ -5,7 +5,8 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, Oasst2Url, InMemoryDocumentStore } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
+import type { CollectionStateStore } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput, DataKind, DocumentStore } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
@@ -44,6 +45,9 @@ const SharedCkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckp
 const Stores = DbUrl !== undefined && DbUrl !== "" ? ResolveFoundryStores() : null;
 const FallbackStore = new InMemoryDocumentStore();
 const KindStore = (Kind: DataKind): DocumentStore => (Stores !== null ? Stores.Kind(Kind) : FallbackStore);
+// Collection ledger (progress/exhausted per source) — on the shared Postgres pool, or in-memory without a DB.
+const FallbackCollState = new InMemoryCollectionStateStore();
+const CollState = (): CollectionStateStore => (Stores !== null ? Stores.CollectionState() : FallbackCollState);
 const InspectStore = KindStore("code"); // the dashboard's inspection/stats view (code is the bulk)
 const CkptName = process.env["FOUNDRY_CHECKPOINT_NAME"] ?? "Seed";
 
@@ -201,6 +205,8 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   // is already stored, memory stays low, and the log reflects real storage.
   const IngestedAt = new Date().toISOString();
   let TotalIngested = 0;
+  let TotalNew = 0;
+  let TotalDuplicate = 0;
   const OnRepoReady = async (Source: string, Files: SourceInput[]): Promise<void> => {
     OnEvent({ kind: "scanning", label: "storing " + Source + " (" + Files.length + " files)…" });
     const Stride = Math.max(1, Math.floor(Files.length / 50)); // ~50 progress updates/repo
@@ -208,6 +214,8 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
       if (Done % Stride === 0 || Done === Total) OnEvent({ kind: "repo-progress", repo: Source, filesDone: Done, filesTotal: Total });
     });
     TotalIngested += Stats.Ingested;
+    TotalNew += Stats.New;
+    TotalDuplicate += Stats.Duplicate;
   };
   // Fired before each (slow) download: show a "working" status, and stop cleanly at this boundary if
   // the user pressed Stop — already-stored repos stay (collect is incremental), so nothing is lost.
@@ -248,8 +256,30 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
       }
     }
   }
-  console.log(`[learn] done: ingested ${TotalIngested} files this run`);
-  OnEvent({ kind: "done", ingested: TotalIngested });
+  // Honest summary: distinguish NEW rows from content-hash duplicates. A re-collected bounded source
+  // reads "0 new · N duplicate" (correct dedup) instead of a misleading "ingested N". Semantics tells
+  // the user whether running again can grow the corpus (streaming) or not (bounded, already complete).
+  const Semantics: "bounded" | "streaming" = Providers.some((P) => P.Semantics === "streaming") ? "streaming" : "bounded";
+
+  // Collection ledger (Phase 1): record this source's lifetime progress durably. A bounded source that
+  // produced 0 new but saw duplicates is confirmed fully collected -> Exhausted (the UI can say "complete"
+  // instead of prompting another pointless run). Streaming sources are never exhausted. Non-fatal: a
+  // ledger write failure must not fail the collect run.
+  const StateKey = `${Settings.Source}:${Settings.Query}`;
+  let LifetimeCollected = TotalNew;
+  // Exhausted ONLY when a bounded source ran DRY (0 new, only dups) AND was not merely truncated by the
+  // MaxRepos cap — see ComputeExhausted. Guards against the "you're stuck at this data" false signal.
+  const Exhausted = ComputeExhausted(Semantics, TotalNew, TotalDuplicate, TotalIngested, Settings.MaxRepos);
+  try {
+    const Prev = await CollState().Get(StateKey);
+    LifetimeCollected = (Prev?.Collected ?? 0) + TotalNew;
+    await CollState().Upsert({ SourceKey: StateKey, Kind: SourceKind, Cursor: "{}", Collected: LifetimeCollected, Exhausted, UpdatedAt: new Date().toISOString() });
+  } catch (Caught) {
+    console.warn(`[learn] collection-state write failed (non-fatal): ${(Caught as Error).message}`);
+  }
+
+  console.log(`[learn] done: ${TotalNew} new · ${TotalDuplicate} duplicate · ${TotalIngested} processed (${Semantics}${Exhausted ? ", exhausted" : ""}; lifetime ${LifetimeCollected})`);
+  OnEvent({ kind: "done", ingested: TotalIngested, new: TotalNew, duplicate: TotalDuplicate, semantics: Semantics, collected: LifetimeCollected, exhausted: Exhausted });
 };
 
 // STAGE 2 — Train the model on the collected corpus (subprocess: never blocks the dashboard, can run

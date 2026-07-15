@@ -77,6 +77,7 @@ export function CreateOasstProvider(Options: OasstOptions = {}): WebProvider {
 
   return {
     Name: "oasst",
+    Semantics: "bounded", // a fixed dataset (~10k trees) — a full collect exhausts it; re-runs only dedup
     Fetch: async (Query: string, Limit: number): Promise<SourceInput[]> => {
       const LangFilter = (Query || "all").trim().toLowerCase();
       Options.OnRepoStart?.("OASST dataset"); // working signal + Stop boundary before the (slow) download

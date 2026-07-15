@@ -10,6 +10,11 @@ import { IngestDocuments } from "./Ingest.ts";
 
 export type WebProvider = {
   Name: string;
+  // Collection semantics: "bounded" sources (a fixed dataset like OASST1) are exhausted after a full
+  // collect — re-running yields only duplicates. "streaming" sources (GitHub via query rotation,
+  // Wikipedia random) can keep producing FRESH data every run. The dashboard uses this to explain why
+  // a re-run added nothing ("bounded, already fully collected") vs. suggest running again to grow.
+  Semantics?: "bounded" | "streaming";
   Fetch: (Query: string, Limit: number) => Promise<SourceInput[]>;
 };
 
@@ -52,10 +57,12 @@ export async function IngestFromWeb(
     ByRepo.set(Input.Source, Group);
   }
 
-  const Total: IngestStats = { Ingested: 0, ByTier: { Filtered: 0, Raw: 0, Rejected: 0 }, Failed: 0 };
+  const Total: IngestStats = { Ingested: 0, New: 0, Duplicate: 0, ByTier: { Filtered: 0, Raw: 0, Rejected: 0 }, Failed: 0 };
   for (const [Repo, Group] of ByRepo) {
     const Stats = await IngestDocuments(Group, Store, IngestedAt, EmbeddingDim, (Done, TotalFiles) => OnProgress?.(Repo, Done, TotalFiles));
     Total.Ingested += Stats.Ingested;
+    Total.New += Stats.New;
+    Total.Duplicate += Stats.Duplicate;
     Total.Failed += Stats.Failed;
     Total.ByTier.Filtered += Stats.ByTier.Filtered;
     Total.ByTier.Raw += Stats.ByTier.Raw;

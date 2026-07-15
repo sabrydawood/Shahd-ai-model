@@ -80,7 +80,12 @@ export const DashboardScript = `
   Q('c-maxlabel').textContent=general?'Max items':'Max repos';
   if(general){var opts=SRC==='wikipedia'?LANGS.wiki:LANGS.oasst;Q('c-lang').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('');}
   var kind=SRC==='wikipedia'?'knowledge':(SRC==='oasst'||SRC==='oasst2')?'conversation':'code';
-  Q('c-kindhint').innerHTML='This source is stored in '+pillKind(kind)+' &nbsp;<span style="color:var(--faint)">documents_'+kind+'</span>';
+  // Collection semantics (mirrors each provider's Semantics): bounded = fixed dataset, exhausts after a
+  // full collect; streaming = can keep producing fresh data, run again to grow.
+  var streaming=(SRC==='github'||SRC==='both'||SRC==='wikipedia');
+  var semNote=streaming?'<span style="color:var(--conv)">streaming</span> — run again to collect more'
+   :'<span style="color:var(--mut)">bounded</span> — a full collect exhausts it; re-runs only dedup';
+  Q('c-kindhint').innerHTML='Stored in '+pillKind(kind)+' &nbsp;<span style="color:var(--faint)">documents_'+kind+'</span><br>'+semNote;
  }
  function collectSettings(){
   var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia');
@@ -99,7 +104,15 @@ export const DashboardScript = `
   else if(e.kind==='scanning'){cProg(1,true,e.label);logLine(log,e.label,'a');}
   else if(e.kind==='repo'){cSeen++;if(e.ingested)cNew++;else cSkip++;logLine(log,(e.ingested?'stored ':'skip ')+e.repo+' ['+e.level+', '+e.files+' files]'+(e.ingested?'':(e.reason?' ('+e.reason+')':'')),e.ingested?'ok':'');cProg(cSeen/cMax,false,cSeen+' / '+cMax+' · '+cNew+' new · '+cSkip+' skipped');}
   else if(e.kind==='repo-progress'){cProg(e.filesTotal?e.filesDone/e.filesTotal:0,false,'ingesting '+e.repo+' — '+e.filesDone+' / '+e.filesTotal+' files');}
-  else if(e.kind==='done'){setCollectBtn(false);Q('c-badge').className='pill done';Q('c-badge').textContent='done';cProg(1,false,cNew+' new · '+cSkip+' skipped · '+e.ingested+' files');logLine(log,'done — '+e.ingested+' files from '+cNew+' sources ('+cSkip+' skipped)',e.ingested?'ok':'w');if(e.ingested===0)logLine(log,'0 new: everything matched is already collected — change the query or uncheck Skip.','w');loadOverview();}
+  else if(e.kind==='done'){setCollectBtn(false);Q('c-badge').className='pill done';Q('c-badge').textContent='done';
+   var nw=(e['new']!=null?e['new']:cNew),dup=(e.duplicate!=null?e.duplicate:0);
+   var life=(e.collected!=null?' · lifetime '+fmtN(e.collected):'');
+   cProg(1,false,nw+' new · '+dup+' duplicate · '+e.ingested+' processed');
+   logLine(log,'done — '+nw+' new · '+dup+' duplicate ('+e.ingested+' processed)'+life,nw?'ok':'w');
+   if(e.exhausted){logLine(log,'this source is fully collected (bounded dataset, '+fmtN(e.collected||0)+' total) — re-running only re-checks it. Add a new source or query to grow.','w');}
+   else if(nw===0&&e.ingested>0){logLine(log,e.semantics==='bounded'?'0 new: nothing new from this bounded source this run.':'0 new: everything fetched this run was already collected — try a different query/language, or run again for fresh items.','w');}
+   else if(e.ingested===0){logLine(log,'nothing fetched this run — check the source/query (or the log above for rate-limit errors).','w');}
+   loadOverview();}
   else if(e.kind==='error'){setCollectBtn(false);Q('c-badge').className='pill err';Q('c-badge').textContent='error';logLine(log,'error: '+e.message,'e');}
  }
 

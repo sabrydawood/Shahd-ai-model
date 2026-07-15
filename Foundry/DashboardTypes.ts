@@ -21,7 +21,13 @@ export type LearnEvent =
   | { kind: "scanning"; label: string } // a "working" status shown during silent gaps (searching / downloading a repo)
   | { kind: "repo"; repo: string; level: string; files: number; bytes: number; ingested: boolean; reason: string | null }
   | { kind: "repo-progress"; repo: string; filesDone: number; filesTotal: number } // per-repo file ingestion
-  | { kind: "done"; ingested: number }
+  // ingested = successful upserts; new = rows that did not exist before; duplicate = content-hash dedup
+  // hits. Reporting new vs duplicate is what makes a re-collected bounded source read honestly ("0 new ·
+  // 14355 duplicate") instead of the misleading "ingested 14355". semantics explains why (bounded source
+  // exhausted vs streaming can grow).
+  // collected = this source's LIFETIME new-doc total (collection ledger); exhausted = a bounded source
+  // confirmed fully collected (re-running only dedups).
+  | { kind: "done"; ingested: number; new?: number; duplicate?: number; semantics?: "bounded" | "streaming"; collected?: number; exhausted?: boolean }
   | { kind: "error"; message: string };
 
 export type LearnFn = (Settings: LearnSettings, OnEvent: (Event: LearnEvent) => void, Signal?: AbortSignal) => Promise<void>;

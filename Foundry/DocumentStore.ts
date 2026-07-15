@@ -27,7 +27,10 @@ export type FoundryStats = {
 };
 
 export interface DocumentStore {
-  Upsert(Doc: DocumentRecord): Promise<void>;
+  /** Insert or update a document by Id (content hash). Returns true if the row was NEWLY inserted,
+   *  false if it already existed (a dedup hit that was updated in place) — so ingestion can honestly
+   *  report "N new vs M duplicate" instead of counting every upsert as fresh data. */
+  Upsert(Doc: DocumentRecord): Promise<boolean>;
   All(): Promise<DocumentRecord[]>;
   /** Documents in a tier; Limit caps the read (used for per-kind training size control). */
   ByTier(Tier: Tier, Limit?: number): Promise<DocumentRecord[]>;

@@ -10,8 +10,10 @@ import { CosineSimilarity } from "./Embedding.ts";
 export class InMemoryDocumentStore implements DocumentStore {
   private Docs = new Map<string, DocumentRecord>();
 
-  async Upsert(Doc: DocumentRecord): Promise<void> {
+  async Upsert(Doc: DocumentRecord): Promise<boolean> {
+    const Existed = this.Docs.has(Doc.Id); // dedup by content-hash Id — a re-ingest of the same bytes
     this.Docs.set(Doc.Id, Doc);
+    return !Existed; // true = newly inserted, false = duplicate updated in place
   }
 
   async All(): Promise<DocumentRecord[]> {

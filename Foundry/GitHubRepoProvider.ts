@@ -74,84 +74,99 @@ export function CreateGitHubRepoProvider(Options: GitHubRepoOptions = {}): WebPr
 
   return {
     Name: "github-repo",
+    Semantics: "streaming", // different search queries keep surfacing fresh repos — the corpus can grow
     Fetch: async (Query: string, Limit: number): Promise<SourceInput[]> => {
-      // Paginate the search so MaxRepos beyond 100 is honored (up to GitHub's 1000-result cap). A
-      // search failure (bad token / rate limit) is logged and stops pagination — we process whatever
-      // pages already came back instead of throwing away the whole run.
-      const Want = Math.min(Limit, SearchMaxResults);
-      const Repos: RepoItem[] = [];
-      for (let Page = 1; Repos.length < Want && Page <= Math.ceil(SearchMaxResults / SearchPerPage); Page++) {
-        const PerPage = Math.min(SearchPerPage, Want - Repos.length);
-        try {
-          const Search = (await Http(`https://api.github.com/search/repositories?q=${encodeURIComponent(Query)}&per_page=${PerPage}&page=${Page}`)) as SearchResult;
-          const Items = Search.items ?? [];
-          Log(`[gh] search "${Query}" page ${Page}: ${Items.length} repos`);
-          Repos.push(...Items);
-          if (Items.length < PerPage) break; // no more results
-        } catch (Caught) {
-          Log(`[gh] SEARCH ERROR "${Query}" page ${Page}: ${(Caught as Error).message}`);
-          break;
-        }
-      }
-      Log(`[gh] search "${Query}": ${Repos.length} repos found (want ${Want})`);
+      // GROWTH LEVER: one GitHub query is capped at 1000 results, so re-running it (with SkipRepo) soon
+      // yields only already-learned repos. Accept MULTIPLE queries separated by ";" (or newlines) and
+      // run each — different queries surface different repos, so the code corpus grows well past 1000 in
+      // a single run. A plain single query is unchanged (the list is just [Query]).
+      const Queries = Query.split(/[;\n]+/).map((Q) => Q.trim()).filter((Q) => Q.length > 0);
+      const EffectiveQueries = Queries.length > 0 ? Queries : [Query];
 
-      // Per-repo counters so the run ends with an auditable summary — the answer to "why did it only
-      // do N?" without adding a debugger.
+      // Run-wide counters (across all queries) so the run ends with one auditable summary. Remaining is
+      // the shared MaxRepos budget: repos LOOKED AT this run, drawn from the queries in order.
       let SkippedLearned = 0;
       let SkippedLevel = 0;
       let Errored = 0;
       let Stored = 0;
       let StoredFiles = 0;
+      let Remaining = Limit;
       const Out: SourceInput[] = [];
-      for (const Repo of Repos) {
-        const License = Repo.license?.spdx_id ?? "unknown";
-        if (Options.SkipRepo?.(Repo.full_name) === true) {
-          SkippedLearned++;
-          Log(`[gh] skip (already learned): ${Repo.full_name}`);
-          Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: "already learned" });
-          continue; // don't re-download a repo we already ingested
-        }
-        Options.OnRepoStart?.(Repo.full_name); // signal work before download; THROWS on Stop (propagates)
-        // One bad repo — a 403 secondary rate-limit, a giant tarball, a network blip — must NOT end the
-        // whole run. Wrap the download/assess/ingest so a failure is logged and we move to the next repo.
-        try {
-          Log(`[gh] downloading ${Repo.full_name} (license ${License})…`);
-          const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
-          const Assessment = AssessRepo(Files);
-          const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
-          if (!Ingested) {
-            Log(`[gh] ${Repo.full_name}: level=${Assessment.Level} files=${Assessment.FileCount} bytes=${Assessment.TotalBytes} -> skip (below ${MinLevel})`);
-            Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested: false, Reason: `level ${Assessment.Level} below minimum ${MinLevel}` });
-            SkippedLevel++;
-            continue; // skip low-level repos entirely
+
+      for (const SubQuery of EffectiveQueries) {
+        if (Remaining <= 0) break;
+        // Paginate the search so MaxRepos beyond 100 is honored (up to GitHub's 1000-result cap). A
+        // search failure (bad token / rate limit) is logged and stops pagination — we process whatever
+        // pages already came back instead of throwing away the whole run.
+        const Want = Math.min(Remaining, SearchMaxResults);
+        const Repos: RepoItem[] = [];
+        for (let Page = 1; Repos.length < Want && Page <= Math.ceil(SearchMaxResults / SearchPerPage); Page++) {
+          const PerPage = Math.min(SearchPerPage, Want - Repos.length);
+          try {
+            const Search = (await Http(`https://api.github.com/search/repositories?q=${encodeURIComponent(SubQuery)}&per_page=${PerPage}&page=${Page}`)) as SearchResult;
+            const Items = Search.items ?? [];
+            Log(`[gh] search "${SubQuery}" page ${Page}: ${Items.length} repos`);
+            Repos.push(...Items);
+            if (Items.length < PerPage) break; // no more results
+          } catch (Caught) {
+            Log(`[gh] SEARCH ERROR "${SubQuery}" page ${Page}: ${(Caught as Error).message}`);
+            break;
           }
-          // Only resolve an unclassifiable license for repos we will actually store (after the level
-          // gate) — one extra /license call per NOASSERTION repo, not per searched repo.
-          const StoreLicense = License === "NOASSERTION" || License === "unknown" ? await ResolvePermissiveLicense(Repo.full_name, License, FetchLicense, Log) : License;
-          Log(`[gh] ${Repo.full_name}: level=${Assessment.Level} files=${Assessment.FileCount} bytes=${Assessment.TotalBytes} -> ingest (license ${StoreLicense})`);
-          Options.OnRepo?.({ Repo: Repo.full_name, License: StoreLicense, Assessment, Ingested: true });
-          const Inputs: SourceInput[] = Files.map((File) => ({
-            Source: Repo.full_name,
-            License: StoreLicense,
-            Lang: LangForPath(File.Path),
-            Content: File.Content,
-            Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
-            Origin: "web-permissive",
-          }));
-          // Incremental: store this repo NOW (before downloading the next). Batch: collect for the caller.
-          if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Repo.full_name, Inputs);
-          else Out.push(...Inputs);
-          Stored++;
-          StoredFiles += Inputs.length;
-          Log(`[gh] stored ${Repo.full_name}: ${Inputs.length} files`);
-        } catch (Caught) {
-          Errored++;
-          const Message = (Caught as Error).message;
-          Log(`[gh] ERROR ${Repo.full_name}: ${Message}`);
-          Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: `error: ${Message}` });
+        }
+        Log(`[gh] search "${SubQuery}": ${Repos.length} repos found (want ${Want})`);
+
+        for (const Repo of Repos) {
+          if (Remaining <= 0) break; // MaxRepos budget spent — stop this and any further query
+          Remaining--; // count every repo we look at against the shared budget
+          const License = Repo.license?.spdx_id ?? "unknown";
+          if (Options.SkipRepo?.(Repo.full_name) === true) {
+            SkippedLearned++;
+            Log(`[gh] skip (already learned): ${Repo.full_name}`);
+            Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: "already learned" });
+            continue; // don't re-download a repo we already ingested
+          }
+          Options.OnRepoStart?.(Repo.full_name); // signal work before download; THROWS on Stop (propagates)
+          // One bad repo — a 403 secondary rate-limit, a giant tarball, a network blip — must NOT end the
+          // whole run. Wrap the download/assess/ingest so a failure is logged and we move to the next repo.
+          try {
+            Log(`[gh] downloading ${Repo.full_name} (license ${License})…`);
+            const Files = await FetchRepoFiles(`https://api.github.com/repos/${Repo.full_name}/tarball/${Repo.default_branch}`, Fetch, Limits);
+            const Assessment = AssessRepo(Files);
+            const Ingested = LevelRank[Assessment.Level] >= LevelRank[MinLevel];
+            if (!Ingested) {
+              Log(`[gh] ${Repo.full_name}: level=${Assessment.Level} files=${Assessment.FileCount} bytes=${Assessment.TotalBytes} -> skip (below ${MinLevel})`);
+              Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment, Ingested: false, Reason: `level ${Assessment.Level} below minimum ${MinLevel}` });
+              SkippedLevel++;
+              continue; // skip low-level repos entirely
+            }
+            // Only resolve an unclassifiable license for repos we will actually store (after the level
+            // gate) — one extra /license call per NOASSERTION repo, not per searched repo.
+            const StoreLicense = License === "NOASSERTION" || License === "unknown" ? await ResolvePermissiveLicense(Repo.full_name, License, FetchLicense, Log) : License;
+            Log(`[gh] ${Repo.full_name}: level=${Assessment.Level} files=${Assessment.FileCount} bytes=${Assessment.TotalBytes} -> ingest (license ${StoreLicense})`);
+            Options.OnRepo?.({ Repo: Repo.full_name, License: StoreLicense, Assessment, Ingested: true });
+            const Inputs: SourceInput[] = Files.map((File) => ({
+              Source: Repo.full_name,
+              License: StoreLicense,
+              Lang: LangForPath(File.Path),
+              Content: File.Content,
+              Provenance: `https://github.com/${Repo.full_name}/blob/${Repo.default_branch}/${File.Path}`,
+              Origin: "web-permissive",
+            }));
+            // Incremental: store this repo NOW (before downloading the next). Batch: collect for the caller.
+            if (Options.OnRepoReady !== undefined) await Options.OnRepoReady(Repo.full_name, Inputs);
+            else Out.push(...Inputs);
+            Stored++;
+            StoredFiles += Inputs.length;
+            Log(`[gh] stored ${Repo.full_name}: ${Inputs.length} files`);
+          } catch (Caught) {
+            Errored++;
+            const Message = (Caught as Error).message;
+            Log(`[gh] ERROR ${Repo.full_name}: ${Message}`);
+            Options.OnRepo?.({ Repo: Repo.full_name, License, Assessment: EmptyAssessment, Ingested: false, Reason: `error: ${Message}` });
+          }
         }
       }
-      Log(`[gh] summary "${Query}": found=${Repos.length} alreadyLearned=${SkippedLearned} belowLevel=${SkippedLevel} errored=${Errored} stored=${Stored} repos (${StoredFiles} files)`);
+      Log(`[gh] run summary: queries=${EffectiveQueries.length} alreadyLearned=${SkippedLearned} belowLevel=${SkippedLevel} errored=${Errored} stored=${Stored} repos (${StoredFiles} files)`);
       return Out;
     },
   };

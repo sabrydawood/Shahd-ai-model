@@ -93,6 +93,48 @@ test("incremental collect: OnRepoReady stores each repo before the next is downl
   expect(Order).toEqual(["assess:acme/r1", "store:acme/r1", "assess:acme/r2", "store:acme/r2"]);
 });
 
+test("GitHub multi-query: a ;-separated query runs each and grows past one query's 1000-cap", async () => {
+  // Growth lever: two DISTINCT queries surface distinct repos, so one run collects both — the way the
+  // code corpus grows beyond a single query's ceiling. The search URL carries q=<query>, so the mock
+  // returns a different repo per query.
+  const TarA = await Tar(["A", "B", "C", "D", "E"].map((N) => ({ name: `a-sha/src/${N}.ts`, data: Code(N) })));
+  const TarB = await Tar(["F", "G", "H", "I", "J"].map((N) => ({ name: `b-sha/src/${N}.ts`, data: Code(N) })));
+  const Seen: string[] = [];
+  const Http: HttpJson = async (Url) => {
+    if (Url.includes("q=alpha")) return { items: [{ full_name: "acme/a", default_branch: "main", license: { spdx_id: "MIT" } }] };
+    if (Url.includes("q=beta")) return { items: [{ full_name: "acme/b", default_branch: "main", license: { spdx_id: "MIT" } }] };
+    return { items: [] };
+  };
+  const BytesFetcher: FetchBytes = async (Url) => (Url.includes("acme/a") ? TarA : TarB);
+  const Provider = CreateGitHubRepoProvider({ Http, FetchBytes: BytesFetcher, MinLevel: "medium", OnRepo: (I) => { if (I.Ingested) Seen.push(I.Repo); } });
+  const Docs = await Provider.Fetch("alpha;beta", 10);
+  const Sources = new Set(Docs.map((D) => D.Source));
+  expect(Sources.has("acme/a")).toBe(true);
+  expect(Sources.has("acme/b")).toBe(true); // the SECOND query's repo is collected too
+  expect(Docs.length).toBe(10); // 5 files from each repo
+  expect(Seen).toEqual(["acme/a", "acme/b"]);
+});
+
+test("GitHub multi-query respects the shared MaxRepos budget across queries", async () => {
+  // Budget = 1 repo. Query alpha alone returns 2 repos; only the first is looked at, and query beta
+  // never runs — the MaxRepos cap is a single budget spent across all queries, not per-query.
+  const TarA = await Tar(["A", "B", "C"].map((N) => ({ name: `a-sha/src/${N}.ts`, data: Code(N) })));
+  const Http: HttpJson = async (Url) => {
+    if (Url.includes("q=alpha")) return { items: [
+      { full_name: "acme/a1", default_branch: "main", license: { spdx_id: "MIT" } },
+      { full_name: "acme/a2", default_branch: "main", license: { spdx_id: "MIT" } },
+    ] };
+    if (Url.includes("q=beta")) return { items: [{ full_name: "acme/b", default_branch: "main", license: { spdx_id: "MIT" } }] };
+    return { items: [] };
+  };
+  const Looked: string[] = [];
+  const BytesFetcher: FetchBytes = async () => TarA;
+  const Provider = CreateGitHubRepoProvider({ Http, FetchBytes: BytesFetcher, MinLevel: "medium", OnRepoStart: (R) => Looked.push(R) });
+  const Docs = await Provider.Fetch("alpha;beta", 1);
+  expect(Looked).toEqual(["acme/a1"]); // budget of 1 spent on the first repo; a2 and all of beta skipped
+  expect(Docs.every((D) => D.Source === "acme/a1")).toBe(true);
+});
+
 test("resilient collect: one repo failing (e.g. rate-limit) does not abort the whole run", async () => {
   // The exact failure mode that silently killed collection: a tarball fetch throwing mid-loop. The
   // run must log+skip the bad repo and still store the good ones — not abandon everything.
