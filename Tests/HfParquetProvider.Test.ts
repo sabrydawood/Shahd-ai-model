@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { CreateHfParquetProvider, WikiDumpSource } from "../Foundry/HfParquetProvider.ts";
+import { CreateHfParquetProvider, WikiDumpSource, StackExchangeSource } from "../Foundry/HfParquetProvider.ts";
 import type { ParquetRow, SourceInput, AsyncBuffer } from "../Foundry/FoundryBarrel.ts";
 
 // A fake shard row; ReadRows slices an array of these like hyparquet's rowStart/rowEnd would.
@@ -12,6 +12,16 @@ test("WikiDumpSource.MapRow builds a knowledge doc and skips stubs", () => {
   expect(Doc.Lang).toBe("text-simple");
   expect(Doc.Provenance).toBe("wikipedia:simple:7");
   expect(WikiDumpSource.MapRow({ title: "Stub", text: "short" }, "simple")).toBeNull(); // below MinChars
+});
+
+test("StackExchangeSource.MapRow builds a Q&A conversation turn and skips trivial pairs", () => {
+  const Doc = StackExchangeSource.MapRow({ INSTRUCTION: "How do I reverse a list in Python?", RESPONSE: "Use list.reverse() to reverse in place, or reversed(list) for an iterator.", SOURCE: "stackexchange-stackoverflow" })!;
+  expect(Doc).not.toBeNull();
+  expect(Doc.Content).toContain("User: How do I reverse");
+  expect(Doc.Content).toContain("Assistant: Use list.reverse()");
+  expect(Doc.Provenance).toBe("stackexchange:stackexchange-stackoverflow");
+  expect(StackExchangeSource.MapRow({ INSTRUCTION: "hi", RESPONSE: "yo" })).toBeNull(); // too trivial
+  expect(StackExchangeSource.Kind).toBe("conversation");
 });
 
 test("parquet provider streams a full shard and advances the cursor to the next shard", async () => {

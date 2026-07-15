@@ -5,7 +5,7 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateLocalFolderProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, CreateHfParquetProvider, WikiDumpSource, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateLocalFolderProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, CreateHfParquetProvider, WikiDumpSource, StackExchangeSource, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
 import type { CollectionStateStore, CollectionState } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput, DataKind, DocumentStore } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
@@ -208,7 +208,7 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   // gsm8k -> instruction (reasoning), github/local -> code. Everything collected this run lands in that
   // one physically-separate table.
   const SourceKind: DataKind =
-    Settings.Source === "oasst" || Settings.Source === "oasst2"
+    Settings.Source === "oasst" || Settings.Source === "oasst2" || Settings.Source === "stackexchange"
       ? "conversation"
       : Settings.Source === "wikipedia" || Settings.Source === "wikidump"
         ? "knowledge"
@@ -282,12 +282,13 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
         OnRepoReady,
       }),
     );
-  } else if (Settings.Source === "wikidump") {
-    // Resume from the persisted {Shard, Offset} cursor; report the advanced cursor so it's saved for next
-    // run. This is the first real use of the Phase-1 collection_state cursor.
+  } else if (Settings.Source === "wikidump" || Settings.Source === "stackexchange") {
+    // The two HF-parquet sources share the generic provider: resume from the persisted {Shard, Offset}
+    // cursor and report the advanced cursor so it's saved for next run (the real use of the Phase-1 cursor).
+    const Src = Settings.Source === "wikidump" ? WikiDumpSource : StackExchangeSource;
     const Cur = ParseShardCursor(PrevState?.Cursor);
     Providers.push(
-      CreateHfParquetProvider(WikiDumpSource, {
+      CreateHfParquetProvider(Src, {
         StartShard: Cur.Shard,
         StartOffset: Cur.Offset,
         MaxPerRun: Settings.MaxRepos,

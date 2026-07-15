@@ -166,6 +166,25 @@ export function CreateHfParquetProvider(Source: HfParquetSource, Options: HfParq
   };
 }
 
+// Stack Exchange Q&A (CC-BY-SA) as conversation data — grows the dialogue corpus beyond OASST with real
+// question/answer pairs across every SE site. donfu/oa-stackexchange is already cleaned + paired
+// (columns INSTRUCTION / RESPONSE / SOURCE), parquet under data/. Query is ignored (one corpus); each
+// row becomes a User/Assistant turn. The provider's cursor collects it shard by shard across runs.
+export const StackExchangeSource: HfParquetSource = {
+  Name: "stackexchange",
+  Kind: "conversation",
+  License: "CC-BY-SA-4.0",
+  Dataset: "donfu/oa-stackexchange",
+  ConfigFor: (): string => "data", // the parquet lives under data/ ; there is no per-query config
+  MapRow: (Row: ParquetRow): { Content: string; Provenance: string; Lang: string } | null => {
+    const Q = typeof Row["INSTRUCTION"] === "string" ? (Row["INSTRUCTION"] as string).trim() : "";
+    const A = typeof Row["RESPONSE"] === "string" ? (Row["RESPONSE"] as string).trim() : "";
+    if (Q.length < 10 || A.length < 20) return null; // skip empty / trivial pairs
+    const Site = typeof Row["SOURCE"] === "string" ? (Row["SOURCE"] as string) : "stackexchange";
+    return { Content: `User: ${Q}\n\nAssistant: ${A}`, Provenance: `stackexchange:${Site}`, Lang: "text-en" };
+  },
+};
+
 // The first parquet source: Wikipedia dumps (CC-BY-SA), bulk knowledge to replace the live API's trickle.
 // Query is the language ("simple" for Simple English by default — the smallest config, one shard).
 export const WikiDumpSource: HfParquetSource = {

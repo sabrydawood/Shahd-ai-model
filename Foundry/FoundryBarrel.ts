@@ -48,7 +48,7 @@ export { CreateWikipediaProvider } from "./WikipediaProvider.ts";
 export type { WikipediaOptions } from "./WikipediaProvider.ts";
 export { CreateGsmProvider, GsmRowToDoc, GsmSplits } from "./GsmProvider.ts";
 export type { GsmOptions } from "./GsmProvider.ts";
-export { CreateHfParquetProvider, WikiDumpSource } from "./HfParquetProvider.ts";
+export { CreateHfParquetProvider, WikiDumpSource, StackExchangeSource } from "./HfParquetProvider.ts";
 export type { HfParquetSource, HfParquetOptions, ParquetRow, AsyncBuffer } from "./HfParquetProvider.ts";
 export { FetchWithBackoff, CircuitBreaker, HttpError, RetryAfterToMs, IsTransient } from "./HttpBackoff.ts";
 export type { BackoffOptions } from "./HttpBackoff.ts";

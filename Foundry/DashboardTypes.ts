@@ -6,7 +6,7 @@ import type { RepoLevel } from "./RepoQuality.ts";
 import type { DataKind } from "./DataKinds.ts";
 
 export type LearnSettings = {
-  Source: "github" | "local" | "both" | "oasst" | "oasst2" | "wikipedia" | "gsm8k" | "wikidump" | "folder";
+  Source: "github" | "local" | "both" | "oasst" | "oasst2" | "wikipedia" | "gsm8k" | "wikidump" | "folder" | "stackexchange";
   Query: string; // GitHub search query — or a language filter (oasst/wikipedia/wikidump) or split (gsm8k: train|test|all)
   Repos: string[]; // local repo roots — or, for the "folder" source, the folders to ingest recursively
   Kind?: DataKind; // "folder" source: which documents_<kind> table its files land in (default "books")

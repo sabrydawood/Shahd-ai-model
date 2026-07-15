@@ -19,7 +19,8 @@ export const DashboardScript = `
  var LANGS={oasst:[['all','All languages'],['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['zh','Chinese']],
             wiki:[['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['ja','Japanese']],
             gsm8k:[['train','Train (~7.5k)'],['test','Test (~1.3k)'],['all','All (~8.8k)']],
-            wikidump:[['simple','Simple English (1 shard)'],['ar','Arabic (7 shards)'],['en','English (large)'],['es','Spanish'],['fr','French']]};
+            wikidump:[['simple','Simple English (1 shard)'],['ar','Arabic (7 shards)'],['en','English (large)'],['es','Spanish'],['fr','French']],
+            stackexchange:[['all','All SE sites (14 shards)']]};
  // MODEL-SCALING presets — a COMPLETE one-click config: [Embed,Layers,Heads,Context,Vocab,Batch,
  // Steps, CodeMb,KnowledgeMb (pretrain mix), ConvCount,CodeSamples (chat mix)]. So picking a tier fills
  // the architecture AND the data mix for both modes; adjust any field after.
@@ -73,7 +74,7 @@ export const DashboardScript = `
  var SRC='github';
  function pickSource(s){SRC=s;var cards=document.querySelectorAll('#srccards .s');for(var i=0;i<cards.length;i++)cards[i].classList.toggle('on',cards[i].getAttribute('data-src')===s);syncCollectForm();}
  function syncCollectForm(){
-  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump');
+  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump'||SRC==='stackexchange');
   var folder=(SRC==='folder');
   Q('c-ghbox').style.display=(SRC==='github'||SRC==='both')?'':'none';
   Q('c-localbox').style.display=(SRC==='local'||SRC==='both')?'':'none';
@@ -83,17 +84,17 @@ export const DashboardScript = `
   Q('c-capbox').style.display=(general||folder)?'none':'';
   Q('c-genbox').style.display=general?'':'none';
   Q('c-maxlabel').textContent=general?'Max items':'Max repos';
-  if(general){var opts=SRC==='wikipedia'?LANGS.wiki:SRC==='gsm8k'?LANGS.gsm8k:SRC==='wikidump'?LANGS.wikidump:LANGS.oasst;Q('c-lang').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('');}
-  var kind=folder?Q('c-folderkind').value:(SRC==='wikipedia'||SRC==='wikidump')?'knowledge':(SRC==='oasst'||SRC==='oasst2')?'conversation':SRC==='gsm8k'?'instruction':'code';
+  if(general){var opts=SRC==='wikipedia'?LANGS.wiki:SRC==='gsm8k'?LANGS.gsm8k:SRC==='wikidump'?LANGS.wikidump:SRC==='stackexchange'?LANGS.stackexchange:LANGS.oasst;Q('c-lang').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('');}
+  var kind=folder?Q('c-folderkind').value:(SRC==='wikipedia'||SRC==='wikidump')?'knowledge':(SRC==='oasst'||SRC==='oasst2'||SRC==='stackexchange')?'conversation':SRC==='gsm8k'?'instruction':'code';
   // Collection semantics (mirrors each provider's Semantics): bounded = fixed dataset, exhausts after a
   // full collect; streaming = can keep producing fresh data, run again to grow.
-  var streaming=(SRC==='github'||SRC==='both'||SRC==='wikipedia'||SRC==='wikidump');
+  var streaming=(SRC==='github'||SRC==='both'||SRC==='wikipedia'||SRC==='wikidump'||SRC==='stackexchange');
   var semNote=streaming?'<span style="color:var(--conv)">streaming</span> — run again to collect more'
    :'<span style="color:var(--mut)">bounded</span> — a full collect exhausts it; re-runs only dedup';
   Q('c-kindhint').innerHTML='Stored in '+pillKind(kind)+' &nbsp;<span style="color:var(--faint)">documents_'+kind+'</span><br>'+semNote;
  }
  function collectSettings(){
-  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump');
+  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump'||SRC==='stackexchange');
   var folder=(SRC==='folder');
   var query=general?Q('c-lang').value:(folder?'':Q('c-query').value);
   var repos=(folder?Q('c-folderpath').value:Q('c-repos').value).split(',').map(function(x){return x.trim();}).filter(Boolean);

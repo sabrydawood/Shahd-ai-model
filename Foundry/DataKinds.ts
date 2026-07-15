@@ -25,6 +25,7 @@ export function KindForProvider(ProviderName: string): DataKind {
     case "local-repo":
       return "code";
     case "oasst":
+    case "stackexchange":
       return "conversation";
     case "wikipedia":
     case "wikidump":

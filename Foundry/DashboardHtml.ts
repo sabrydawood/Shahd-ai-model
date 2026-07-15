@@ -61,6 +61,7 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
      <div class="s" data-src="wikipedia" onclick="pickSource('wikipedia')"><b>Wikipedia <span class="pill know">knowledge</span></b><small>CC-BY-SA · Arabic + English</small></div>
      <div class="s" data-src="gsm8k" onclick="pickSource('gsm8k')"><b>GSM8K <span class="pill" style="background:var(--mut)">instruction</span></b><small>MIT · math reasoning w/ steps</small></div>
      <div class="s" data-src="wikidump" onclick="pickSource('wikidump')"><b>Wikipedia dumps <span class="pill know">knowledge</span></b><small>CC-BY-SA · bulk parquet · resumes by shard</small></div>
+     <div class="s" data-src="stackexchange" onclick="pickSource('stackexchange')"><b>Stack Exchange <span class="pill conv">conversation</span></b><small>CC-BY-SA · Q&amp;A pairs · parquet</small></div>
      <div class="s" data-src="folder" onclick="pickSource('folder')"><b>Local folder <span class="pill" style="background:var(--books)">any files</span></b><small>ingest a downloaded corpus (e.g. Gutenberg)</small></div>
     </div>
     <div class="card" style="margin-bottom:14px">
