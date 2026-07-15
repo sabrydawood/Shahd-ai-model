@@ -61,12 +61,14 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
      <div class="s" data-src="wikipedia" onclick="pickSource('wikipedia')"><b>Wikipedia <span class="pill know">knowledge</span></b><small>CC-BY-SA · Arabic + English</small></div>
      <div class="s" data-src="gsm8k" onclick="pickSource('gsm8k')"><b>GSM8K <span class="pill" style="background:var(--mut)">instruction</span></b><small>MIT · math reasoning w/ steps</small></div>
      <div class="s" data-src="wikidump" onclick="pickSource('wikidump')"><b>Wikipedia dumps <span class="pill know">knowledge</span></b><small>CC-BY-SA · bulk parquet · resumes by shard</small></div>
+     <div class="s" data-src="folder" onclick="pickSource('folder')"><b>Local folder <span class="pill" style="background:var(--books)">any files</span></b><small>ingest a downloaded corpus (e.g. Gutenberg)</small></div>
     </div>
     <div class="card" style="margin-bottom:14px">
      <div class="row c3">
       <div id="c-genbox" style="display:none"><label class="f">Language to collect</label><select class="i" id="c-lang"></select></div>
       <div id="c-ghbox"><label class="f">GitHub query <span style="color:var(--faint);font-weight:400">— use ; for several (each grows the corpus)</span></label><input class="i" id="c-query" value="stars:>1000 language:typescript"></div>
       <div id="c-localbox" style="display:none"><label class="f">Local repo paths (comma-separated)</label><input class="i" id="c-repos" value="."></div>
+      <div id="c-folderbox" style="display:none"><label class="f">Folder path(s) — comma-separated</label><input class="i" id="c-folderpath" value="" placeholder="D:\App\books"></div>
       <div><label class="f" id="c-maxlabel">Max repos</label><input class="i tnum" id="c-maxrepos" type="number" value="5"></div>
       <div id="c-levelbox"><label class="f">Min level</label><select class="i" id="c-minlevel"><option>medium</option><option>high</option><option>low</option></select></div>
      </div>
@@ -74,6 +76,11 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
       <div><label class="f">Max files / repo</label><input class="i tnum" id="c-maxfiles" type="number" value="2000"></div>
       <div><label class="f">Max MB / repo</label><input class="i tnum" id="c-maxmb" type="number" value="32"></div>
       <div><label class="f">Max KB / file</label><input class="i tnum" id="c-maxkb" type="number" value="512"></div>
+     </div>
+     <div class="row c3" id="c-folderopts" style="display:none;margin-top:12px">
+      <div><label class="f">Store as kind</label><select class="i" id="c-folderkind" onchange="syncCollectForm()"><option value="books">books</option><option value="knowledge">knowledge</option><option value="code">code</option><option value="instruction">instruction</option><option value="web">web</option></select></div>
+      <div><label class="f">License</label><input class="i" id="c-folderlicense" value="public-domain"></div>
+      <div></div>
      </div>
      <div style="display:flex;gap:14px;align-items:center;margin-top:14px;flex-wrap:wrap">
       <label class="chk"><input type="checkbox" id="c-skip" checked> Skip sources already collected</label>

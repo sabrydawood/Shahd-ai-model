@@ -93,7 +93,7 @@ function ToNum(Value: unknown, Default: number): number {
 }
 
 function IsLearnSource(Value: unknown): Value is LearnSettings["Source"] {
-  return Value === "github" || Value === "local" || Value === "both" || Value === "oasst" || Value === "oasst2" || Value === "wikipedia" || Value === "gsm8k" || Value === "wikidump";
+  return Value === "github" || Value === "local" || Value === "both" || Value === "oasst" || Value === "oasst2" || Value === "wikipedia" || Value === "gsm8k" || Value === "wikidump" || Value === "folder";
 }
 
 function ParseSettings(Body: Record<string, unknown>): LearnSettings {
@@ -113,6 +113,9 @@ function ParseSettings(Body: Record<string, unknown>): LearnSettings {
     MaxBytesPerRepo: ToNum(Body["MaxBytesPerRepo"], 32_000_000),
     MaxContentBytes: ToNum(Body["MaxContentBytes"], 512_000),
     SkipLearned: Body["SkipLearned"] !== false,
+    // "folder" source: which kind its files become + the license to record (defaults suit Gutenberg books).
+    Kind: IsDataKind(String(Body["Kind"])) ? (Body["Kind"] as LearnSettings["Kind"]) : undefined,
+    License: typeof Body["License"] === "string" && Body["License"] !== "" ? Body["License"] : undefined,
   };
 }
 

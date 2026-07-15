@@ -40,6 +40,8 @@ export { CreateGitHubRepoProvider } from "./GitHubRepoProvider.ts";
 export type { GitHubRepoOptions } from "./GitHubRepoProvider.ts";
 export { CreateLocalRepoProvider } from "./LocalRepoProvider.ts";
 export type { LocalRepoOptions } from "./LocalRepoProvider.ts";
+export { CreateLocalFolderProvider, StripBookBoilerplate } from "./LocalFolderProvider.ts";
+export type { LocalFolderOptions } from "./LocalFolderProvider.ts";
 export { CreateOasstProvider, Oasst1Url, Oasst2Url } from "./OasstProvider.ts";
 export type { OasstOptions } from "./OasstProvider.ts";
 export { CreateWikipediaProvider } from "./WikipediaProvider.ts";

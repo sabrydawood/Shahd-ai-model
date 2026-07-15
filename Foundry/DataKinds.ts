@@ -33,6 +33,8 @@ export function KindForProvider(ProviderName: string): DataKind {
       return "instruction";
     case "web-search":
       return "web";
+    case "local-folder":
+      return "books"; // default; the dashboard lets the user override the kind per folder
     default:
       return "code";
   }

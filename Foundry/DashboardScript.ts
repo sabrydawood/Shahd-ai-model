@@ -74,14 +74,17 @@ export const DashboardScript = `
  function pickSource(s){SRC=s;var cards=document.querySelectorAll('#srccards .s');for(var i=0;i<cards.length;i++)cards[i].classList.toggle('on',cards[i].getAttribute('data-src')===s);syncCollectForm();}
  function syncCollectForm(){
   var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump');
+  var folder=(SRC==='folder');
   Q('c-ghbox').style.display=(SRC==='github'||SRC==='both')?'':'none';
   Q('c-localbox').style.display=(SRC==='local'||SRC==='both')?'':'none';
-  Q('c-levelbox').style.display=general?'none':'';
-  Q('c-capbox').style.display=general?'none':'';
+  Q('c-folderbox').style.display=folder?'':'none';
+  Q('c-folderopts').style.display=folder?'':'none';
+  Q('c-levelbox').style.display=(general||folder)?'none':'';
+  Q('c-capbox').style.display=(general||folder)?'none':'';
   Q('c-genbox').style.display=general?'':'none';
   Q('c-maxlabel').textContent=general?'Max items':'Max repos';
   if(general){var opts=SRC==='wikipedia'?LANGS.wiki:SRC==='gsm8k'?LANGS.gsm8k:SRC==='wikidump'?LANGS.wikidump:LANGS.oasst;Q('c-lang').innerHTML=opts.map(function(o){return '<option value="'+o[0]+'">'+o[1]+'</option>';}).join('');}
-  var kind=(SRC==='wikipedia'||SRC==='wikidump')?'knowledge':(SRC==='oasst'||SRC==='oasst2')?'conversation':SRC==='gsm8k'?'instruction':'code';
+  var kind=folder?Q('c-folderkind').value:(SRC==='wikipedia'||SRC==='wikidump')?'knowledge':(SRC==='oasst'||SRC==='oasst2')?'conversation':SRC==='gsm8k'?'instruction':'code';
   // Collection semantics (mirrors each provider's Semantics): bounded = fixed dataset, exhausts after a
   // full collect; streaming = can keep producing fresh data, run again to grow.
   var streaming=(SRC==='github'||SRC==='both'||SRC==='wikipedia'||SRC==='wikidump');
@@ -90,11 +93,15 @@ export const DashboardScript = `
   Q('c-kindhint').innerHTML='Stored in '+pillKind(kind)+' &nbsp;<span style="color:var(--faint)">documents_'+kind+'</span><br>'+semNote;
  }
  function collectSettings(){
-  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia');
-  var query=general?Q('c-lang').value:Q('c-query').value;
-  return {Source:SRC,Query:query,Repos:Q('c-repos').value.split(',').map(function(x){return x.trim();}).filter(Boolean),
+  var general=(SRC==='oasst'||SRC==='oasst2'||SRC==='wikipedia'||SRC==='gsm8k'||SRC==='wikidump');
+  var folder=(SRC==='folder');
+  var query=general?Q('c-lang').value:(folder?'':Q('c-query').value);
+  var repos=(folder?Q('c-folderpath').value:Q('c-repos').value).split(',').map(function(x){return x.trim();}).filter(Boolean);
+  var s={Source:SRC,Query:query,Repos:repos,
    MinLevel:Q('c-minlevel').value,MaxRepos:+Q('c-maxrepos').value||1,MaxFilesPerRepo:+Q('c-maxfiles').value,
    MaxBytesPerRepo:(+Q('c-maxmb').value)*1e6,MaxContentBytes:(+Q('c-maxkb').value)*1e3,SkipLearned:Q('c-skip').checked};
+  if(folder){s.Kind=Q('c-folderkind').value;s.License=Q('c-folderlicense').value;}
+  return s;
  }
  function cStart(){if(!wsReady())return;save();WS.send(JSON.stringify({type:'learn',settings:collectSettings()}));}
  function cStop(){if(wsReady()){WS.send(JSON.stringify({type:'learn-stop'}));Q('c-start').textContent='stopping…';Q('c-start').disabled=true;}}

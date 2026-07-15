@@ -5,7 +5,7 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, CreateHfParquetProvider, WikiDumpSource, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateLocalFolderProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, CreateHfParquetProvider, WikiDumpSource, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
 import type { CollectionStateStore, CollectionState } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput, DataKind, DocumentStore } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
@@ -214,7 +214,9 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
         ? "knowledge"
         : Settings.Source === "gsm8k"
           ? "instruction"
-          : "code";
+          : Settings.Source === "folder"
+            ? Settings.Kind ?? "books"
+            : "code";
   const CollectStore = KindStore(SourceKind);
   const Learned = new Set(Settings.SkipLearned ? await CollectStore.Sources() : []);
   const Skip = (Repo: string): boolean => Learned.has(Repo);
@@ -264,6 +266,20 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
     Providers.push(CreateWikipediaProvider({ OnRepoStart, OnRepoReady }));
   } else if (Settings.Source === "gsm8k") {
     Providers.push(CreateGsmProvider({ OnRepoStart, OnRepoReady }));
+  } else if (Settings.Source === "folder") {
+    // Ingest every text file under the given folder(s) as the chosen kind — the on-disk path for a
+    // downloaded corpus (e.g. all of Gutenberg). License defaults to public-domain (the books case).
+    Providers.push(
+      CreateLocalFolderProvider({
+        Roots: Settings.Repos,
+        License: Settings.License,
+        Lang: SourceKind === "books" ? "text" : `text-${SourceKind}`,
+        MaxContentBytes: Settings.MaxContentBytes,
+        SkipRoot: Skip,
+        OnRepoStart,
+        OnRepoReady,
+      }),
+    );
   } else if (Settings.Source === "wikidump") {
     // Resume from the persisted {Shard, Offset} cursor; report the advanced cursor so it's saved for next
     // run. This is the first real use of the Phase-1 collection_state cursor.
