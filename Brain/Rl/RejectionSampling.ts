@@ -4,22 +4,22 @@
 // from an EXTERNAL ground-truth reward (execution) — the discriminator CAPABILITIES.md says
 // actually works at this scale.
 
-import { RunCode } from "../Eval/CodeExecutor.ts";
+import { RunAgainstTests } from "../Eval/EvalHarness.ts";
 import type { EvalProblem } from "../Eval/EvalHarness.ts";
 
 /** Keep the DISTINCT candidates whose (candidate + tests) run passes — the SFT training set for this
  *  round. Deduping matters: without it, a sampler that emits the same passing string many times would
- *  over-weight that one solution in the next SFT round (and, across STaR rounds, collapse diversity). */
+ *  over-weight that one solution in the next SFT round (and, across STaR rounds, collapse diversity).
+ *  A candidate is marked seen BEFORE execution (not only on pass): a repeated FAILING candidate is
+ *  skipped on its second occurrence instead of being re-run through the sandboxed executor for nothing. */
 export function CollectPassing(Problem: EvalProblem, Candidates: string[], TimeoutMs = 5000): string[] {
   const Seen = new Set<string>();
   const Passing: string[] = [];
   for (const Candidate of Candidates) {
     const Key = Candidate.trim();
     if (Seen.has(Key)) continue;
-    if (RunCode(`${Candidate}\n${Problem.Tests}`, TimeoutMs).Passed) {
-      Seen.add(Key);
-      Passing.push(Candidate);
-    }
+    Seen.add(Key);
+    if (RunAgainstTests(Problem, Candidate, TimeoutMs)) Passing.push(Candidate);
   }
   return Passing;
 }

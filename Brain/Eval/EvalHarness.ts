@@ -11,11 +11,18 @@ export type EvalProblem = {
 
 export type ProblemEval = { Name: string; Correct: number; N: number; PassAt1: number };
 
+/** Execute ONE candidate against a problem's tests via the sandboxed runner. The single place that
+ *  builds the (candidate + tests) source and reads back pass/fail — EvaluateProblem here and
+ *  RejectionSampling's CollectPassing both call this instead of duplicating the template string. */
+export function RunAgainstTests(Problem: EvalProblem, Candidate: string, TimeoutMs = 5000): boolean {
+  return RunCode(`${Candidate}\n${Problem.Tests}`, TimeoutMs).Passed;
+}
+
 /** Run every candidate against the problem's tests; count how many pass. */
 export function EvaluateProblem(Problem: EvalProblem, Candidates: string[], TimeoutMs = 5000): ProblemEval {
   let Correct = 0;
   for (const Candidate of Candidates) {
-    if (RunCode(`${Candidate}\n${Problem.Tests}`, TimeoutMs).Passed) Correct++;
+    if (RunAgainstTests(Problem, Candidate, TimeoutMs)) Correct++;
   }
   return {
     Name: Problem.Name,
@@ -23,17 +30,4 @@ export function EvaluateProblem(Problem: EvalProblem, Candidates: string[], Time
     N: Candidates.length,
     PassAt1: Candidates.length > 0 ? PassAtK(Candidates.length, Correct, 1) : 0,
   };
-}
-
-/** Mean pass@k across a suite of problems, each evaluated with N candidates. */
-export function PassAtKSuite(Problems: EvalProblem[], CandidatesPer: string[][], K: number): number {
-  if (Problems.length === 0) return 0;
-  let Total = 0;
-  for (let I = 0; I < Problems.length; I++) {
-    const Cands = CandidatesPer[I] ?? [];
-    let Correct = 0;
-    for (const C of Cands) if (RunCode(`${C}\n${Problems[I].Tests}`).Passed) Correct++;
-    Total += Cands.length >= K ? PassAtK(Cands.length, Correct, K) : 0;
-  }
-  return Total / Problems.length;
 }

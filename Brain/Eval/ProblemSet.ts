@@ -19,7 +19,7 @@ export const CodingProblems: CodingProblem[] = [
     Name: "add",
     Prompt: "Write a TypeScript function `add(a: number, b: number): number` that returns the sum of a and b.",
     Reference: "function add(a: number, b: number): number { return a + b; }",
-    Tests: `if (add(2, 3) !== 5) throw new Error("add(2,3)"); if (add(-4, 4) !== 0) throw new Error("add(-4,4)"); if (add(0, 0) !== 0) throw new Error("add(0,0)");`,
+    Tests: `for (const [a, b] of [[2, 3], [-4, 4], [0, 0], [17, -9], [1000, -1000]]) if (add(a, b) !== a + b) throw new Error(\`add(\${a},\${b})\`);`,
   },
   {
     Name: "subtract",

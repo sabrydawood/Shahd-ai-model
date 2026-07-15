@@ -38,6 +38,26 @@ const Ops: readonly [string, (A: number, B: number) => number][] = [
   ["%", (A, B): number => B === 0 ? 0 : A % B],
 ];
 
+// Per-op operand ranges: '^' with two 2-digit operands can overflow to an astronomically large (or
+// non-finite) result, and unconstrained '/' almost never divides evenly, teaching the model a "just
+// round it" pattern instead of exact arithmetic. PickOperands keeps every op's example well-formed:
+// '^' gets a small base/exponent, '/' picks a divisor that evenly divides the dividend, everything else
+// uses the caller's requested [Min, Max] range unchanged.
+function PickOperands(Rng: SeededRng, Op: string, Min: number, Max: number): [number, number] {
+  if (Op === "^") {
+    const Base = 2 + Math.floor(Rng.NextFloat() * 11); // 2..12
+    const Exponent = 2 + Math.floor(Rng.NextFloat() * 3); // 2..4
+    return [Base, Exponent];
+  }
+  const A = Min + Math.floor(Rng.NextFloat() * (Max - Min + 1));
+  if (Op === "/") {
+    const B = 1 + Math.floor(Rng.NextFloat() * Math.min(Max, 12)); // small divisor
+    return [A * B, B]; // dividend is an exact multiple of the divisor
+  }
+  const B = Min + Math.floor(Rng.NextFloat() * (Max - Min + 1));
+  return [A, B];
+}
+
 function Simple(User: string, Assistant: string): ChatMessage[] {
   return [{ Role: "System", Content: System }, { Role: "User", Content: User }, { Role: "Assistant", Content: Assistant }];
 }
@@ -45,9 +65,8 @@ function Simple(User: string, Assistant: string): ChatMessage[] {
 // Arithmetic taught as a TOOL CALL (not a memorized answer) — the model learns to reach for the
 // calculator, exactly the learned-tool behavior the agent loop expects.
 function ArithmeticToolConversation(Rng: SeededRng): ChatMessage[] {
-  const A = 1 + Math.floor(Rng.NextFloat() * 99);
-  const B = 1 + Math.floor(Rng.NextFloat() * 99);
   const [Op, Fn] = Ops[Math.floor(Rng.NextFloat() * Ops.length)]!;
+  const [A, B] = PickOperands(Rng, Op, 1, 99);
   const Result = Fn(A, B);
   const Exemplar: ToolExemplar = {
     User: `What is ${A} ${Op} ${B}?`,
@@ -64,9 +83,8 @@ function ArithmeticToolConversation(Rng: SeededRng): ChatMessage[] {
 // addition template. Uses DefaultThinkingSystemPrompt so the model is asked at serving to do exactly
 // what it was taught here.
 function ThinkingConversation(Rng: SeededRng): ChatMessage[] {
-  const A = 2 + Math.floor(Rng.NextFloat() * 97);
-  const B = 2 + Math.floor(Rng.NextFloat() * 97);
   const [Op, Fn] = Ops[Math.floor(Rng.NextFloat() * Ops.length)]!;
+  const [A, B] = PickOperands(Rng, Op, 2, 98);
   const Result = Fn(A, B);
   const Reasoning = `The problem is ${A} ${Op} ${B}. Applying ${Op} to ${A} and ${B} gives ${Result}.`;
   const Assistant = WrapThinkingAnswer(Reasoning, String(Result));

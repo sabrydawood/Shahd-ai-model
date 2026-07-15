@@ -9,6 +9,7 @@
 // as the controllable seam where that stronger isolation is plugged in. Do NOT enable ExecEnabled in a
 // deployment reachable by untrusted input without that OS-level isolation.
 
+import { spawnSync } from "node:child_process";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -26,14 +27,25 @@ export type ExecResult = {
 // timeout on `while(true){}` would freeze the single-threaded process for that entire duration.
 const HardMaxTimeoutMs = 10000;
 
-// Run with a SECRET-SCRUBBED environment: model-authored code inherits the process env otherwise, so
-// DB URLs / API tokens would be readable (and exfiltratable via network). Drop any var whose NAME looks
-// sensitive; keep the rest (PATH, SystemRoot, TEMP, … stay so the runtime still starts on every OS).
+// A hard ceiling on captured stdout+stderr: HardMaxTimeoutMs bounds wall-clock only — a candidate that
+// prints in a tight loop can still grow host memory unbounded within that window. node:child_process's
+// spawnSync `maxBuffer` kills the process and returns (rather than buffering without limit) once this
+// many bytes of combined output have been produced.
+const MaxOutputBytes = 1024 * 1024; // 1 MB
+
+// Run with an ALLOWLISTED environment: model-authored code inherits the process env otherwise, so DB
+// URLs / API tokens would be readable (and exfiltratable via network). Pass through ONLY the handful of
+// vars the bun runtime needs to start (PATH resolution, temp dir, Windows shell plumbing) — everything
+// else, secrets included, is dropped by default instead of pattern-matched out.
+const AllowedEnvVars = new Set([
+  "PATH", "Path", "SystemRoot", "windir", "TEMP", "TMP", "HOME", "USERPROFILE",
+  "ProgramFiles", "ProgramData", "PATHEXT", "COMSPEC",
+]);
+
 function ScrubbedEnv(): Record<string, string> {
-  const Sensitive = /token|secret|key|password|passwd|database|credential|auth|api/i;
   const Out: Record<string, string> = {};
   for (const [Name, Value] of Object.entries(process.env)) {
-    if (Value !== undefined && !Sensitive.test(Name)) Out[Name] = Value;
+    if (Value !== undefined && AllowedEnvVars.has(Name)) Out[Name] = Value;
   }
   return Out;
 }
@@ -45,17 +57,19 @@ export function RunCode(Code: string, TimeoutMs = 5000): ExecResult {
   writeFileSync(File, Code);
   const Start = Date.now();
   try {
-    const Proc = Bun.spawnSync(["bun", "run", File], {
+    // node:child_process's spawnSync (not Bun.spawnSync) so a `maxBuffer` overflow terminates the
+    // process and returns synchronously, capping memory, while staying fully synchronous — no signature
+    // change, so every existing caller (sync `.Passed` access) keeps working unchanged.
+    const Proc = spawnSync("bun", ["run", File], {
       timeout: Timeout,
-      stdout: "pipe",
-      stderr: "pipe",
+      maxBuffer: MaxOutputBytes,
       env: ScrubbedEnv(),
     });
     return {
-      Passed: Proc.exitCode === 0,
-      ExitCode: Proc.exitCode,
-      Stdout: Proc.stdout.toString(),
-      Stderr: Proc.stderr.toString(),
+      Passed: Proc.status === 0,
+      ExitCode: Proc.status,
+      Stdout: Proc.stdout ? Proc.stdout.toString() : "",
+      Stderr: Proc.stderr ? Proc.stderr.toString() : "",
       DurationMs: Date.now() - Start,
     };
   } finally {
