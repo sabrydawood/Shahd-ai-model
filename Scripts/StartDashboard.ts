@@ -5,8 +5,8 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, Oasst2Url } from "../Foundry/FoundryBarrel.ts";
-import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, Oasst2Url, InMemoryDocumentStore } from "../Foundry/FoundryBarrel.ts";
+import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput, DataKind, DocumentStore } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
 import { InMemoryChatStore } from "../Foundry/InMemoryChatStore.ts";
@@ -29,12 +29,17 @@ import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SeededRng } from "../Brain/Random/SeededRng.ts";
-import { ResolveStore, GitHubToken } from "./FoundryEnv.ts";
+import { ResolveFoundryStores, GitHubToken } from "./FoundryEnv.ts";
 import { ReadArg } from "./ScriptArgs.ts";
 import { existsSync } from "node:fs";
 
-const { Store, Kind } = ResolveStore();
 const DbUrl = process.env["DATABASE_URL"];
+// Per-kind stores (Postgres): collection routes each source to its own kind table, so data types stay
+// separated. Without a database, fall back to one in-memory store (no kind separation).
+const Stores = DbUrl !== undefined && DbUrl !== "" ? ResolveFoundryStores() : null;
+const FallbackStore = new InMemoryDocumentStore();
+const KindStore = (Kind: DataKind): DocumentStore => (Stores !== null ? Stores.Kind(Kind) : FallbackStore);
+const InspectStore = KindStore("code"); // the dashboard's inspection/stats view (code is the bulk)
 const CkptName = process.env["FOUNDRY_CHECKPOINT_NAME"] ?? "Seed";
 
 // Mutable model state — swapped in place when a training run finishes or the user picks a saved model.
@@ -152,7 +157,11 @@ const Chat = new ChatService(Chats, Stream);
 
 // STAGE 1 — Collect data (the provider-backed Learn runner).
 const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
-  const Learned = new Set(Settings.SkipLearned ? await Store.Sources() : []);
+  // Route this run to the kind table for its source: oasst -> conversation, wikipedia -> knowledge,
+  // github/local -> code. Everything collected this run lands in that one physically-separate table.
+  const SourceKind: DataKind = Settings.Source === "oasst" || Settings.Source === "oasst2" ? "conversation" : Settings.Source === "wikipedia" ? "knowledge" : "code";
+  const CollectStore = KindStore(SourceKind);
+  const Learned = new Set(Settings.SkipLearned ? await CollectStore.Sources() : []);
   const Skip = (Repo: string): boolean => Learned.has(Repo);
   const OnRepo = (Info: RepoIngestInfo): void => {
     const Event: LearnEvent = { kind: "repo", repo: Info.Repo, level: Info.Assessment.Level, files: Info.Assessment.FileCount, bytes: Info.Assessment.TotalBytes, ingested: Info.Ingested, reason: Info.Reason ?? null };
@@ -165,7 +174,7 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   const OnRepoReady = async (Source: string, Files: SourceInput[]): Promise<void> => {
     OnEvent({ kind: "scanning", label: "storing " + Source + " (" + Files.length + " files)…" });
     const Stride = Math.max(1, Math.floor(Files.length / 50)); // ~50 progress updates/repo
-    const Stats = await IngestDocuments(Files, Store, IngestedAt, 256, (Done, Total) => {
+    const Stats = await IngestDocuments(Files, CollectStore, IngestedAt, 256, (Done, Total) => {
       if (Done % Stride === 0 || Done === Total) OnEvent({ kind: "repo-progress", repo: Source, filesDone: Done, filesTotal: Total });
     });
     TotalIngested += Stats.Ingested;
@@ -285,7 +294,7 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
 await ReloadModel("Seed");
 
 const Port = Number(ReadArg("--Port=", "8090"));
-StartDashboard(Store, Port, Learn, {
+StartDashboard(InspectStore, Port, Learn, {
   Chat,
   GetModel: () => ModelHolder.Info,
   GetModelName: () => ModelHolder.Name,
@@ -294,5 +303,5 @@ StartDashboard(Store, Port, Learn, {
   Checkpoints: ListCheckpoints,
   LoadModel: (Name: string) => ReloadModel(Name),
 });
-console.log(`Foundry control panel: http://localhost:${Port}  (store=${Kind}, ${await Store.Count()} docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
+console.log(`Foundry control panel: http://localhost:${Port}  (store=${Stores !== null ? "postgres/per-kind" : "memory"}, ${await InspectStore.Count()} code docs, GitHub token: ${GitHubToken() ? "yes" : "no"})`);
 console.log(`  chat model: ${ModelHolder.Source} (memory: ${DbUrl ? "postgres" : "in-memory"})`);
