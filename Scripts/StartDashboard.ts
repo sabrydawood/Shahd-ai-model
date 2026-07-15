@@ -5,8 +5,8 @@
 // run finishes it is hot-reloaded into the chat model with no restart.
 //   bun run foundry:dashboard      # then open http://localhost:8090
 
-import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
-import type { CollectionStateStore } from "../Foundry/FoundryBarrel.ts";
+import { StartDashboard, IngestDocuments, CreateGitHubRepoProvider, CreateLocalRepoProvider, CreateOasstProvider, CreateWikipediaProvider, CreateGsmProvider, CreateHfParquetProvider, WikiDumpSource, Oasst2Url, InMemoryDocumentStore, InMemoryCollectionStateStore, ComputeExhausted } from "../Foundry/FoundryBarrel.ts";
+import type { CollectionStateStore, CollectionState } from "../Foundry/FoundryBarrel.ts";
 import type { LearnFn, WebProvider, RepoIngestInfo, LearnEvent, TrainFn, TrainSettings, TrainEvent, SourceInput, DataKind, DocumentStore } from "../Foundry/FoundryBarrel.ts";
 import type { ChatStore, ChatMessage } from "../Foundry/ChatStore.ts";
 import { PostgresChatStore } from "../Foundry/PostgresChatStore.ts";
@@ -190,15 +190,44 @@ const Chats: ChatStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresChatS
 const Chat = new ChatService(Chats, Stream);
 
 // STAGE 1 — Collect data (the provider-backed Learn runner).
+// Parse a persisted parquet cursor ('{"Shard":N,"Offset":M}') into shard/offset, defaulting to the
+// start on missing/garbage input so a corrupt ledger row can never crash a collect run.
+function ParseShardCursor(Raw: string | undefined): { Shard: number; Offset: number } {
+  try {
+    const P = JSON.parse(Raw ?? "{}") as { Shard?: unknown; Offset?: unknown };
+    const Shard = typeof P.Shard === "number" && P.Shard >= 0 ? Math.floor(P.Shard) : 0;
+    const Offset = typeof P.Offset === "number" && P.Offset >= 0 ? Math.floor(P.Offset) : 0;
+    return { Shard, Offset };
+  } catch {
+    return { Shard: 0, Offset: 0 };
+  }
+}
+
 const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   // Route this run to the kind table for its source: oasst -> conversation, wikipedia -> knowledge,
   // gsm8k -> instruction (reasoning), github/local -> code. Everything collected this run lands in that
   // one physically-separate table.
   const SourceKind: DataKind =
-    Settings.Source === "oasst" || Settings.Source === "oasst2" ? "conversation" : Settings.Source === "wikipedia" ? "knowledge" : Settings.Source === "gsm8k" ? "instruction" : "code";
+    Settings.Source === "oasst" || Settings.Source === "oasst2"
+      ? "conversation"
+      : Settings.Source === "wikipedia" || Settings.Source === "wikidump"
+        ? "knowledge"
+        : Settings.Source === "gsm8k"
+          ? "instruction"
+          : "code";
   const CollectStore = KindStore(SourceKind);
   const Learned = new Set(Settings.SkipLearned ? await CollectStore.Sources() : []);
   const Skip = (Repo: string): boolean => Learned.has(Repo);
+  // Collection ledger read (Phase 1/2): load this source's prior progress so a streaming parquet source
+  // resumes from its persisted {Shard, Offset} cursor. Non-fatal — a read failure just starts fresh.
+  const StateKey = `${Settings.Source}:${Settings.Query}`;
+  let PrevState: CollectionState | null = null;
+  try {
+    PrevState = await CollState().Get(StateKey);
+  } catch (Caught) {
+    console.warn(`[learn] collection-state read failed (non-fatal): ${(Caught as Error).message}`);
+  }
+  let RunCursor = PrevState?.Cursor ?? "{}";
   const OnRepo = (Info: RepoIngestInfo): void => {
     const Event: LearnEvent = { kind: "repo", repo: Info.Repo, level: Info.Assessment.Level, files: Info.Assessment.FileCount, bytes: Info.Assessment.TotalBytes, ingested: Info.Ingested, reason: Info.Reason ?? null };
     OnEvent(Event);
@@ -235,6 +264,22 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
     Providers.push(CreateWikipediaProvider({ OnRepoStart, OnRepoReady }));
   } else if (Settings.Source === "gsm8k") {
     Providers.push(CreateGsmProvider({ OnRepoStart, OnRepoReady }));
+  } else if (Settings.Source === "wikidump") {
+    // Resume from the persisted {Shard, Offset} cursor; report the advanced cursor so it's saved for next
+    // run. This is the first real use of the Phase-1 collection_state cursor.
+    const Cur = ParseShardCursor(PrevState?.Cursor);
+    Providers.push(
+      CreateHfParquetProvider(WikiDumpSource, {
+        StartShard: Cur.Shard,
+        StartOffset: Cur.Offset,
+        MaxPerRun: Settings.MaxRepos,
+        OnRepoStart,
+        OnRepoReady,
+        OnCursor: (Shard, Offset) => {
+          RunCursor = JSON.stringify({ Shard, Offset });
+        },
+      }),
+    );
   } else {
     if (Settings.Source !== "local") {
       Providers.push(CreateGitHubRepoProvider({ Token: GitHubToken(), MinLevel: Settings.MinLevel, MaxFilesPerRepo: Settings.MaxFilesPerRepo, MaxBytesPerRepo: Settings.MaxBytesPerRepo, MaxContentBytesPerRepo: Settings.MaxContentBytes, SkipRepo: Skip, OnRepoStart, OnRepo, OnRepoReady }));
@@ -269,15 +314,14 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
   // produced 0 new but saw duplicates is confirmed fully collected -> Exhausted (the UI can say "complete"
   // instead of prompting another pointless run). Streaming sources are never exhausted. Non-fatal: a
   // ledger write failure must not fail the collect run.
-  const StateKey = `${Settings.Source}:${Settings.Query}`;
-  let LifetimeCollected = TotalNew;
+  // Lifetime accumulates on the prior total (read once at the start). Cursor carries a streaming parquet
+  // source's advanced {Shard, Offset} so the next run resumes; "{}" for sources without a cursor.
+  const LifetimeCollected = (PrevState?.Collected ?? 0) + TotalNew;
   // Exhausted ONLY when a bounded source ran DRY (0 new, only dups) AND was not merely truncated by the
   // MaxRepos cap — see ComputeExhausted. Guards against the "you're stuck at this data" false signal.
   const Exhausted = ComputeExhausted(Semantics, TotalNew, TotalDuplicate, TotalIngested, Settings.MaxRepos);
   try {
-    const Prev = await CollState().Get(StateKey);
-    LifetimeCollected = (Prev?.Collected ?? 0) + TotalNew;
-    await CollState().Upsert({ SourceKey: StateKey, Kind: SourceKind, Cursor: "{}", Collected: LifetimeCollected, Exhausted, UpdatedAt: new Date().toISOString() });
+    await CollState().Upsert({ SourceKey: StateKey, Kind: SourceKind, Cursor: RunCursor, Collected: LifetimeCollected, Exhausted, UpdatedAt: new Date().toISOString() });
   } catch (Caught) {
     console.warn(`[learn] collection-state write failed (non-fatal): ${(Caught as Error).message}`);
   }

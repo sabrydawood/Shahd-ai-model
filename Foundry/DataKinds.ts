@@ -27,6 +27,7 @@ export function KindForProvider(ProviderName: string): DataKind {
     case "oasst":
       return "conversation";
     case "wikipedia":
+    case "wikidump":
       return "knowledge";
     case "gsm8k":
       return "instruction";
