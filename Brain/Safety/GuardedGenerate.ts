@@ -12,6 +12,12 @@ import type { SamplingOptions } from "../Sampling/Sampler.ts";
 import { Generate, GenerateAsync } from "../Sampling/Generate.ts";
 import { SafetyPolicy } from "./SafetyPolicy.ts";
 
+// Tail window (chars) for the incremental per-token safety scan in GuardedGenerateStream: generously
+// larger than the longest span any HarmfulRules pattern can match (every pattern uses bounded {0,N}
+// gaps, well under 200 chars total), so scanning only the tail catches every match a full-string scan
+// would, without re-scanning the whole growing completion on every emitted token.
+const SafetyScanWindowChars = 400;
+
 export function GuardedGenerate(
   Model: Shahd,
   Tokenizer: Tokenizer,
@@ -77,7 +83,16 @@ export async function GuardedGenerateStream(
   let Emitted = 0;
   const EmitVetted = (Text: string): void => {
     if (Text.length <= Emitted) return;
-    Policy.EnforceOutput(Prompt + Text); // vet BEFORE delivering — throws (and aborts) if unsafe
+    // Incremental scan: everything before this call's tail window was already vetted by a prior call
+    // and can't retroactively become unsafe, so only the newly grown suffix (plus enough overlap to
+    // span any single HarmfulRules match, all of which use bounded {0,N} gaps well under this window)
+    // needs re-checking. Avoids re-scanning the whole growing text on every token (O(n) -> O(n^2) over
+    // a generation). The final vet before returning below is still unconditional and full-text.
+    const Tail =
+      Text.length >= SafetyScanWindowChars
+        ? Text.slice(-SafetyScanWindowChars)
+        : Prompt.slice(-(SafetyScanWindowChars - Text.length)) + Text;
+    Policy.EnforceOutput(Tail); // vet BEFORE delivering — throws (and aborts) if unsafe
     OnDelta(Text.slice(Emitted));
     Emitted = Text.length;
   };

@@ -23,10 +23,12 @@ test("benign code and normal requests are allowed (no false positives)", () => {
   expect(ScanContent("how do I kill a background process in node", "Standard").Blocked).toBe(false);
 });
 
-test("Off scans nothing; Strict enforces CBRN that Standard does not", () => {
+test("Off scans nothing; CBRN is enforced from the Standard default upward", () => {
   expect(ScanContent("how to build a bomb", "Off").Blocked).toBe(false);
   const Cbrn = "how to synthesize sarin nerve agent";
-  expect(ScanContent(Cbrn, "Standard").Blocked).toBe(false);
+  // CBRN is the highest-severity category and must be blocked at the shipped default (Standard),
+  // not opt-in behind Strict.
+  expect(ScanContent(Cbrn, "Standard").Blocked).toBe(true);
   expect(ScanContent(Cbrn, "Strict").Blocked).toBe(true);
 });
 

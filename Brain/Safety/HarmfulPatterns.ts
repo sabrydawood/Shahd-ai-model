@@ -41,7 +41,7 @@ export const HarmfulRules: CategoryRule[] = [
   },
   {
     Category: "Cbrn",
-    MinLevel: "Strict",
+    MinLevel: "Standard",
     Patterns: [
       /\b(synthesi[sz]e|produce|weaponi[sz]e|culture|disperse)\b[^\n]{0,50}\b(nerve agent|sarin|vx|anthrax|ricin|bioweapon|chemical weapon|dirty bomb|radiological)\b/i,
     ],

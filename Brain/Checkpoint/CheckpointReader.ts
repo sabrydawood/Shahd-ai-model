@@ -20,7 +20,7 @@ export function ParseCheckpoint(Text: string): Checkpoint {
     throw new Error(`ParseCheckpoint: format version ${Data.FormatVersion} != ${CheckpointFormatVersion}`);
   }
   if (typeof Data.Checksum === "string") {
-    const Actual = ChecksumPayload(Data.Params, Data.Optimizer);
+    const Actual = ChecksumPayload(Data.Params, Data.Optimizer, Data.Config);
     if (Actual !== Data.Checksum) {
       throw new Error(`ParseCheckpoint: checksum mismatch — checkpoint is corrupt or truncated (expected ${Data.Checksum.slice(0, 12)}…, got ${Actual.slice(0, 12)}…)`);
     }
@@ -70,6 +70,9 @@ export function ApplyCheckpoint(Ckpt: Checkpoint, Model: Shahd, Optimizer: Optim
 
   const MDump = Ckpt.Optimizer.M.map(DecodeFloat64);
   const VDump = Ckpt.Optimizer.V.map(DecodeFloat64);
+  if (MDump.length < Optimizer.M.length || VDump.length < Optimizer.V.length) {
+    throw new Error(`ApplyCheckpoint: optimizer moment count mismatch (checkpoint has ${MDump.length}/${VDump.length}, model expects ${Optimizer.M.length}/${Optimizer.V.length})`);
+  }
   for (let I = 0; I < Optimizer.M.length; I++) {
     if (MDump[I].length !== Optimizer.M[I].length || VDump[I].length !== Optimizer.V[I].length) {
       throw new Error(`ApplyCheckpoint: optimizer moment ${I} length mismatch (truncated/corrupt checkpoint)`);

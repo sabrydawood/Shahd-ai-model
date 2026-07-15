@@ -25,9 +25,11 @@ export type Checkpoint = {
 };
 
 /** Deterministic sha256 over the numeric payload (weights + optimizer moments + step + per-tensor
- *  shape). Catches silent corruption/truncation of a checkpoint's tensors that the shape-metadata
- *  checks alone can't — a same-length bit-flip loads as valid-but-wrong weights without this. */
-export function ChecksumPayload(Params: TensorState[], Optimizer: OptimizerStateDump): string {
+ *  shape + config). Catches silent corruption/truncation of a checkpoint's tensors that the
+ *  shape-metadata checks alone can't — a same-length bit-flip loads as valid-but-wrong weights
+ *  without this. Folding in Config also ties the checksum to the checkpoint's own declared
+ *  architecture/hyperparameters, so a corrupted or swapped Config is caught too. */
+export function ChecksumPayload(Params: TensorState[], Optimizer: OptimizerStateDump, Config: ShahdConfig): string {
   const Hash = createHash("sha256");
   for (const P of Params) {
     Hash.update(`${P.Rows}x${P.Cols}:`);
@@ -36,6 +38,7 @@ export function ChecksumPayload(Params: TensorState[], Optimizer: OptimizerState
   for (const M of Optimizer.M) Hash.update(M);
   for (const V of Optimizer.V) Hash.update(V);
   Hash.update(String(Optimizer.StepCount));
+  Hash.update(JSON.stringify(Config));
   return Hash.digest("hex");
 }
 

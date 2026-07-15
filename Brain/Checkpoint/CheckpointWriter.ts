@@ -58,7 +58,7 @@ export function BuildCheckpoint(
     },
     TokenizerState,
     Meta,
-    Checksum: ChecksumPayload(Params, OptimizerDump),
+    Checksum: ChecksumPayload(Params, OptimizerDump, ExtractShahdConfig(Model.Config)),
   };
 }
 
