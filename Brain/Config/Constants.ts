@@ -45,6 +45,7 @@ export const DefaultConfig: ShahdConfig = {
     EvalInterval: 250,
     EvalIterations: 50,
     CheckpointInterval: 1000,
+    Workers: 0, // sequence-parallel worker threads; 0 = sequential (exact, bit-stable default)
   },
   Tokenizer: {
     Kind: "Char",

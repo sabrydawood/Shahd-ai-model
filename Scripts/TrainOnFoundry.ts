@@ -19,6 +19,7 @@ import { DedupedIndices } from "../Brain/Data/NearDedup.ts";
 import { InMemoryDataLoader } from "../Brain/Data/DataLoader.ts";
 import { Shahd } from "../Brain/Nn/Shahd.ts";
 import { CreateOptimizer } from "../Brain/Optim/OptimBarrel.ts";
+import { CreateTrainWorkerPool } from "../Brain/Training/WorkerPool.ts";
 import { TrainLoop } from "../Brain/Training/TrainLoop.ts";
 import { Logger } from "../Brain/Logging/Logger.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
@@ -43,6 +44,7 @@ const NumLayers = Number(ReadArg("--Layers=", "4"));
 const NumHeads = Number(ReadArg("--Heads=", "4"));
 const BlockSize = Number(ReadArg("--Block=", "128"));
 const BatchSize = Number(ReadArg("--Batch=", "16"));
+const Workers = Number(ReadArg("--Workers=", "0")); // sequence-parallel worker threads; 0 = sequential
 const Steps = Number(ReadArg("--Steps=", "2000"));
 const SavePath = ReadArg("--Save=", "Checkpoints/Foundry.ckpt");
 const Measure = ReadFlag("--Measure");
@@ -129,7 +131,7 @@ const EvalInterval = Measure ? EffectiveSteps + 1 : Math.max(1, Math.min(100, Ef
 const Config = LoadConfig({
   Overrides: {
     Model: { VocabSize: Tokenizer.VocabSize, EmbedDim, NumLayers, NumHeads, BlockSize, PositionScheme: "Rope", NormKind: "RmsNorm", MlpKind: "SwiGlu" },
-    Training: { BatchSize, EvalInterval, EvalIterations: 10, CheckpointInterval: EffectiveSteps },
+    Training: { BatchSize, Workers, EvalInterval, EvalIterations: 10, CheckpointInterval: EffectiveSteps },
     Schedule: { Kind: "Cosine", WarmupSteps, MaxSteps: EffectiveSteps, MinLrRatio: 0.1 },
     Optimizer: { Kind: "AdamW", LearningRate: 0.003 },
   },
@@ -153,8 +155,11 @@ if (Resume !== null) {
   ApplyCheckpoint(Resume.Ckpt, Model, Optimizer, Rng); // restore weights + optimizer + RNG state
   StartStep = Resume.Step;
 }
+// Sequence-parallel pool (after ApplyCheckpoint so the shared weights start from the restored
+// values; ApplyCheckpoint itself writes in place, so resume order would work either way).
+const Pool = Config.Training.Workers > 0 ? await CreateTrainWorkerPool(Model, Config) : null;
 const Params = Model.Parameters().reduce((A, P) => A + P.Size, 0);
-console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${EffectiveSteps} steps`);
+console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}${Pool !== null ? `; ${Pool.WorkerCount} workers` : ""}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${EffectiveSteps} steps`);
 
 const GlobalStart = Date.now();
 const RunLogger = new Logger(null, true);
@@ -164,10 +169,11 @@ const OnStep = (Step: number, Loss: number): void => {
 };
 
 if (Measure) {
-  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep);
+  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep, undefined, Pool);
   const PerStep = (Date.now() - GlobalStart) / EffectiveSteps;
   console.log(`per-step wall time: ${PerStep.toFixed(0)}ms -> ~${((PerStep * 2000) / 60000).toFixed(1)} min for 2000 steps`);
   console.log("measure-only: not saving.");
+  Pool?.Dispose();
   process.exit(0);
 }
 
@@ -179,7 +185,7 @@ function BuildAt(Step: number): Checkpoint {
 }
 for (let Start = StartStep; Start < EffectiveSteps; Start += CheckEvery) {
   const End = Math.min(Start + CheckEvery, EffectiveSteps);
-  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep, { StartStep: Start, EndStep: End, StartMs: GlobalStart });
+  TrainLoop(Model, Optimizer, TrainLoader, ValLoader, Config, RunLogger, OnStep, { StartStep: Start, EndStep: End, StartMs: GlobalStart }, Pool);
   const Ckpt = BuildAt(End);
   if (CkptStore !== null) {
     await CkptStore.Save(CkptName, Ckpt, new Date().toISOString());
@@ -197,4 +203,5 @@ if (CkptStore !== null) {
 
 const Sample = Generate(Model, Tokenizer.Encode("export function "), 160, { ...DefaultSampling, Temperature: 0.7 }, Rng.SamplingRng);
 console.log("\n--- sample ---\n" + Tokenizer.Decode(Sample));
+Pool?.Dispose();
 process.exit(0);

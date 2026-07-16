@@ -38,7 +38,13 @@ import type { ComputeBackend } from "./ComputeBackend.ts";
 
 type MatMulSymbol = (a: Pointer, b: Pointer, out: Pointer, m: number, k: number, n: number) => void;
 type MatMulAccSymbol = (a: Pointer, b: Pointer, out: Pointer, m: number, k: number, n: number, acc: number) => void;
-type KernelSymbols = { MatMul: MatMulSymbol; Nt: MatMulAccSymbol | null; Tn: MatMulAccSymbol | null };
+type ThreadsSymbol = (n: number) => void;
+type KernelSymbols = {
+  MatMul: MatMulSymbol;
+  Nt: MatMulAccSymbol | null;
+  Tn: MatMulAccSymbol | null;
+  Threads: ThreadsSymbol | null;
+};
 
 const MatMulDef = {
   args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32],
@@ -48,6 +54,7 @@ const MatMulAccDef = {
   args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
   returns: FFIType.void,
 } as const;
+const ThreadsDef = { args: [FFIType.i32], returns: FFIType.void } as const;
 
 // Strong, process-lifetime refs keyed by library path (see the header for why these are never closed).
 const LoadedLibs = new Map<string, KernelSymbols>();
@@ -58,17 +65,23 @@ function LoadKernelSymbols(LibPath: string): KernelSymbols {
 
   let Symbols: KernelSymbols;
   try {
-    const Lib = dlopen(LibPath, { MatMulF64: MatMulDef, MatMulNTF64: MatMulAccDef, MatMulTNF64: MatMulAccDef });
+    const Lib = dlopen(LibPath, {
+      MatMulF64: MatMulDef,
+      MatMulNTF64: MatMulAccDef,
+      MatMulTNF64: MatMulAccDef,
+      SetKernelThreads: ThreadsDef,
+    });
     Symbols = {
       MatMul: Lib.symbols.MatMulF64 as unknown as MatMulSymbol,
       Nt: Lib.symbols.MatMulNTF64 as unknown as MatMulAccSymbol,
       Tn: Lib.symbols.MatMulTNF64 as unknown as MatMulAccSymbol,
+      Threads: Lib.symbols.SetKernelThreads as unknown as ThreadsSymbol,
     };
   } catch {
     // Older DLL without the backward entry points (or the throw is "no such file" — then this
     // second dlopen throws too, which is the constructor's absent-DLL signal for TryGoFfi).
     const Lib = dlopen(LibPath, { MatMulF64: MatMulDef });
-    Symbols = { MatMul: Lib.symbols.MatMulF64 as unknown as MatMulSymbol, Nt: null, Tn: null };
+    Symbols = { MatMul: Lib.symbols.MatMulF64 as unknown as MatMulSymbol, Nt: null, Tn: null, Threads: null };
   }
   LoadedLibs.set(LibPath, Symbols);
   return Symbols;
@@ -88,14 +101,22 @@ export class GoFfiBackend implements ComputeBackend {
   MatMulNtAcc?: (A: Float64Array, Bt: Float64Array, Out: Float64Array, M: number, K: number, N: number) => void;
   MatMulTnAcc?: (A: Float64Array, DOut: Float64Array, Db: Float64Array, M: number, K: number, N: number) => void;
 
+  /** PROCESS-GLOBAL cap on per-call goroutine fan-out (one Go runtime serves every JS thread).
+   *  The training worker pool sets 1 around its dispatch — its JS workers ARE the parallelism —
+   *  and 0 restores the all-cores default. Only defined when the DLL exports the symbol. */
+  SetKernelThreads?: (N: number) => void;
+
   constructor(LibPath = "GoKernels/matmul.dll") {
     this.Symbols = LoadKernelSymbols(LibPath); // throws when the DLL is absent — TryGoFfi probes with this
-    const { Nt, Tn } = this.Symbols;
+    const { Nt, Tn, Threads } = this.Symbols;
     if (Nt !== null) {
       this.MatMulNtAcc = (A, Bt, Out, M, K, N) => Nt(BufPtr(A), BufPtr(Bt), BufPtr(Out), M, K, N, 1);
     }
     if (Tn !== null) {
       this.MatMulTnAcc = (A, DOut, Db, M, K, N) => Tn(BufPtr(A), BufPtr(DOut), BufPtr(Db), M, K, N, 1);
+    }
+    if (Threads !== null) {
+      this.SetKernelThreads = (N) => Threads(N);
     }
   }
 

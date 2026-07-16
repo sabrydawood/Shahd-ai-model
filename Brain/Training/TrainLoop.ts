@@ -6,6 +6,7 @@ import type { Optimizer } from "../Optim/OptimBarrel.ts";
 import type { DataLoader } from "../Data/DataLoader.ts";
 import type { ResolvedConfig } from "../Config/ConfigTypes.ts";
 import type { Logger } from "../Logging/Logger.ts";
+import type { TrainWorkerPool } from "./WorkerPool.ts";
 import { AccumulateGradients } from "./GradAccumulation.ts";
 import { EvalLoss } from "./EvalLoop.ts";
 import { ClipGradGlobalNorm, ComputeLr } from "../Optim/OptimBarrel.ts";
@@ -27,6 +28,7 @@ export function TrainLoop(
   RunLogger: Logger,
   OnStep?: (Step: number, TrainLoss: number, ElapsedMs: number) => void, // lightweight per-step hook (no eval)
   Range?: { StartStep: number; EndStep: number; StartMs: number },
+  Pool?: TrainWorkerPool | null, // sequence-parallel accumulation (Config.Training.Workers); null/undefined = sequential
 ): void {
   const MaxSteps = Config.Schedule.MaxSteps;
   const StartStep = Range?.StartStep ?? 0;
@@ -35,7 +37,11 @@ export function TrainLoop(
 
   for (let Step = StartStep; Step < EndStep; Step++) {
     const Lr = ComputeLr(Step, Config);
-    const TrainLoss = AccumulateGradients(Model, Optimizer, TrainLoader, Config.Training.BatchSize);
+    // The pooled path is a drop-in: same loader order, same 1/BatchSize grad scaling, same mean
+    // loss — only WHERE each sequence's ForwardBackward runs changes (see WorkerPool.ts).
+    const TrainLoss = Pool != null
+      ? Pool.Accumulate(TrainLoader, Config.Training.BatchSize)
+      : AccumulateGradients(Model, Optimizer, TrainLoader, Config.Training.BatchSize);
     const GradNorm = ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
     if (!Number.isFinite(GradNorm)) {
       throw new Error(`Non-finite gradient norm at step ${Step}: ${GradNorm}`);

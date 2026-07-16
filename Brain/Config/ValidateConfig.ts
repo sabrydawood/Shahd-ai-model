@@ -50,6 +50,10 @@ export const TrainingSchema = z.object({
   EvalInterval: PositiveInt,
   EvalIterations: PositiveInt,
   CheckpointInterval: PositiveInt,
+  // Sequence-level parallelism: batch sequences fan out across this many JS worker threads, each
+  // running the UNMODIFIED ForwardBackward on shared weights (SharedArrayBuffer) with private grad
+  // buffers reduced on the main thread in fixed order. 0 = the sequential path (exact, default).
+  Workers: z.number().int().nonnegative(),
 });
 
 export const TokenizerSchema = z.object({

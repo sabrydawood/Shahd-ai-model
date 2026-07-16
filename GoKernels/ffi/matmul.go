@@ -37,6 +37,7 @@ import "C"
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -62,12 +63,34 @@ var BtPool = sync.Pool{
 	},
 }
 
+// Process-global cap on every fan-out in this library (0 = runtime.NumCPU()). The training worker
+// pool sets this to 1 while its JS workers run one kernel call each on their own thread — the pool
+// IS the parallelism there, and per-call goroutine fan-out would only oversubscribe the cores. One
+// Go runtime serves every JS worker thread in the process, so this is a process-wide phase switch,
+// flipped by the pool around its dispatch (never mid-call).
+var MaxKernelWorkers int64
+
+// SetKernelThreads caps goroutine fan-out per kernel call; n <= 0 restores the all-cores default.
+//
+//export SetKernelThreads
+func SetKernelThreads(n C.int) {
+	atomic.StoreInt64(&MaxKernelWorkers, int64(n))
+}
+
+func KernelWorkerCap() int {
+	V := atomic.LoadInt64(&MaxKernelWorkers)
+	if V <= 0 {
+		return runtime.NumCPU()
+	}
+	return int(V)
+}
+
 // FanOutRows splits [0,M) into RowBlock-aligned ranges across goroutines and runs the C row kernel
 // on each — one worker per CPU, capped by row count, each range snapped UP to a RowBlock multiple so
 // workers run the C kernel's blocked fast path instead of straddling a block boundary (which would
 // drop rows into its slower one-at-a-time remainder loop). bt must be [N,K] row-major.
 func FanOutRows(a, bt, out *C.double, M, K, N, Acc int) {
-	Workers := runtime.NumCPU()
+	Workers := KernelWorkerCap()
 	if Workers > M {
 		Workers = M
 	}
@@ -76,6 +99,13 @@ func FanOutRows(a, bt, out *C.double, M, K, N, Acc int) {
 	}
 	RowsPer := (M + Workers - 1) / Workers
 	RowsPer = ((RowsPer + RowBlock - 1) / RowBlock) * RowBlock
+
+	// Single range: run on the calling thread. Under the worker pool this is EVERY call (cap = 1),
+	// so the spawn/join would otherwise be paid thousands of times per step for zero parallelism.
+	if RowsPer >= M {
+		C.MatMulRowsAvx(a, bt, out, C.int(0), C.int(M), C.int(K), C.int(N), C.int(Acc))
+		return
+	}
 
 	var Wg sync.WaitGroup
 	for Start := 0; Start < M; Start += RowsPer {
@@ -102,7 +132,7 @@ func FanOutRows(a, bt, out *C.double, M, K, N, Acc int) {
 // attention projections (~4k elements) LOSES ~30% — goroutine spawn/join costs more than the
 // transpose itself at that size. One worker per TransposeChunk elements lets each shape pick.
 func TransposeBt(BT, B []float64, K, N int) {
-	Workers := runtime.NumCPU()
+	Workers := KernelWorkerCap()
 	TWorkers := (N * K) / TransposeChunk
 	if TWorkers > Workers {
 		TWorkers = Workers
@@ -112,6 +142,15 @@ func TransposeBt(BT, B []float64, K, N int) {
 	}
 	if TWorkers < 1 {
 		TWorkers = 1
+	}
+	if TWorkers == 1 { // same single-range rule as FanOutRows: no goroutine for no parallelism
+		for j := 0; j < N; j++ {
+			jK := j * K
+			for p := 0; p < K; p++ {
+				BT[jK+p] = B[p*N+j]
+			}
+		}
+		return
 	}
 	JPer := (N + TWorkers - 1) / TWorkers
 	var TWg sync.WaitGroup
@@ -177,7 +216,7 @@ func MatMulTNF64(a *C.double, dout *C.double, db *C.double, m C.int, k C.int, n 
 	N := int(n)
 
 	Workers := (M * K * N) / TnFlopChunk
-	Cpus := runtime.NumCPU()
+	Cpus := KernelWorkerCap()
 	if Workers > Cpus {
 		Workers = Cpus
 	}
@@ -186,6 +225,10 @@ func MatMulTNF64(a *C.double, dout *C.double, db *C.double, m C.int, k C.int, n 
 	}
 	if Workers < 1 {
 		Workers = 1
+	}
+	if Workers == 1 { // same single-range rule as FanOutRows
+		C.MatMulTnAvx(a, dout, db, C.int(0), C.int(K), C.int(M), C.int(K), C.int(N), C.int(acc))
+		return
 	}
 	PPer := (K + Workers - 1) / Workers
 
