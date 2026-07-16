@@ -22,9 +22,11 @@ export const DashboardScript = `
             wikidump:[['simple','Simple English (1 shard)'],['ar','Arabic (7 shards)'],['en','English (large)'],['es','Spanish'],['fr','French']],
             stackexchange:[['all','All SE sites (14 shards)']]};
  // MODEL-SCALING presets — a COMPLETE one-click config: [Embed,Layers,Heads,Context,Vocab,Batch,
- // Steps, CodeMb,KnowledgeMb (pretrain mix), ConvCount,CodeSamples (chat mix)]. So picking a tier fills
- // the architecture AND the data mix for both modes; adjust any field after.
- var PRESETS={Seed:[96,3,4,96,512,16,6000,2,0,3000,2000,4],Nano:[128,4,4,256,512,16,5000,3,0,6000,3000,8],Micro:[256,6,4,512,1024,16,16000,8,0,20000,8000,8],Mini:[512,8,8,1024,4096,32,22000,30,0,100000,30000,8],Small:[768,12,12,2048,16384,64,19000,80,0,300000,80000,8],Base:[1024,24,16,4096,32000,128,17000,200,0,500000,150000,8],Large:[2048,32,32,8192,50000,256,22000,500,0,1000000,300000,8]};
+ // Steps, CodeMb,KnowledgeMb (pretrain mix), ConvCount,CodeSamples (chat mix), Workers, Precision].
+ // Picking a tier fills the architecture AND the data mix AND the run knobs for both modes; adjust
+ // any field after. Micro+ defaults to F32 — memory is the binding constraint from that tier up
+ // (see Docs/MODEL-SCALING.md, Run knobs).
+ var PRESETS={Seed:[96,3,4,96,512,16,6000,2,0,3000,2000,4,'F64'],Nano:[128,4,4,256,512,16,5000,3,0,6000,3000,8,'F64'],Micro:[256,6,4,512,1024,16,16000,8,0,20000,8000,8,'F32'],Mini:[512,8,8,1024,4096,32,22000,30,0,100000,30000,8,'F32'],Small:[768,12,12,2048,16384,64,19000,80,0,300000,80000,8,'F32'],Base:[1024,24,16,4096,32000,128,17000,200,0,500000,150000,8,'F32'],Large:[2048,32,32,8192,50000,256,22000,500,0,1000000,300000,8,'F32']};
 
  // ── theme ──
  function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('shahd.theme',t);}catch(e){}Q('themebtn').textContent=t==='dark'?'☀':'☾';}
@@ -178,7 +180,7 @@ export const DashboardScript = `
  // ── Train ──
  var tMode='pretrain';
  function setMode(m){tMode=m;Q('t-mode-pre').classList.toggle('on',m==='pretrain');Q('t-mode-chat').classList.toggle('on',m==='chat');Q('t-mix-pretrain').style.display=m==='pretrain'?'':'none';Q('t-mix-chat').style.display=m==='chat'?'':'none';}
- function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];Q('t-corpus').value=p[7];Q('t-know').value=p[8];Q('t-conv').value=p[9];Q('t-code').value=p[10];Q('t-workers').value=p[11];}
+ function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];Q('t-corpus').value=p[7];Q('t-know').value=p[8];Q('t-conv').value=p[9];Q('t-code').value=p[10];Q('t-workers').value=p[11];if(Q('t-prec'))Q('t-prec').value=p[12];}
  function renderResumeOptions(){var sel=Q('t-resume');var cur=sel.value;
   sel.innerHTML='<option value="">◇ New model</option>'+checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">↻ '+H(c.Name)+' ('+H(c.Format)+', step '+fmtN(c.Step)+')</option>';}).join('');
   sel.value=cur;renderFromOptions();}

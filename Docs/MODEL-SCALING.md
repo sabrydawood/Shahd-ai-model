@@ -22,28 +22,33 @@ panel exactly**, so each row is a ready preset. `Batch` and `Steps` are the Chin
 more. `Corpus MB` is a practical starting size — we currently have ~60 MB collected, so the larger
 tiers need much more data (see §3).
 
-| Tier | Embed | Layers | Heads | Context | Vocab | Batch | Steps | Corpus MB | Params | Trains on |
-|------|-------|--------|-------|---------|-------|-------|-------|-----------|--------|-----------|
-| Seed | 96 | 3 | 4 | 96 | 512 | 16 | ~6,000 | 2 | 0.49M | CPU |
-| Nano | 128 | 4 | 4 | 256 | 512 | 16 | ~5,000 | 3 | 1.1M | CPU |
-| Micro | 256 | 6 | 4 | 512 | 1,024 | 16 | ~16,000 | 8 | 6.6M | CPU (slow) |
-| Mini | 512 | 8 | 8 | 1,024 | 4,096 | 32 | ~22,000 | 30 | 36M | small GPU |
-| Small | 768 | 12 | 12 | 2,048 | 16,384 | 64 | ~19,000 | 80 | 126M | 8–12 GB GPU |
-| Base | 1,024 | 24 | 16 | 4,096 | 32,000 | 128 | ~17,000 | 200 | 435M | 16–24 GB GPU |
-| Large | 2,048 | 32 | 32 | 8,192 | 50,000 | 256 | ~22,000 | 500 | 2.25B | 40–80 GB GPU |
+| Tier | Embed | Layers | Heads | Context | Vocab | Batch | Steps | Corpus MB | Workers | Precision | Params | Trains on |
+|------|-------|--------|-------|---------|-------|-------|-------|-----------|---------|-----------|--------|-----------|
+| Seed | 96 | 3 | 4 | 96 | 512 | 16 | ~6,000 | 2 | 8 | F64 | 0.49M | CPU |
+| Nano | 128 | 4 | 4 | 256 | 512 | 16 | ~5,000 | 3 | 8 | F64 | 1.1M | CPU |
+| Micro | 256 | 6 | 4 | 512 | 1,024 | 16 | ~16,000 | 8 | 8–16 | **F32** | 6.6M | CPU (slow) |
+| Mini | 512 | 8 | 8 | 1,024 | 4,096 | 32 | ~22,000 | 30 | — (GPU) | F32 | 36M | small GPU |
+| Small | 768 | 12 | 12 | 2,048 | 16,384 | 64 | ~19,000 | 80 | — (GPU) | F32/mixed | 126M | 8–12 GB GPU |
+| Base | 1,024 | 24 | 16 | 4,096 | 32,000 | 128 | ~17,000 | 200 | — (GPU) | F32/mixed | 435M | 16–24 GB GPU |
+| Large | 2,048 | 32 | 32 | 8,192 | 50,000 | 256 | ~22,000 | 500 | — (GPU) | F32/mixed | 2.25B | 40–80 GB GPU |
 
 Rough equivalents by size: Small ≈ GPT-2 small (124M), Base ≈ GPT-2 medium/large, Large ≈ a small
 modern LLM.
 
-Training memory ≈ 4× the weights (weights + gradients + optimizer m/v), plus activations. Storage
-**precision is a per-run knob** (the Train panel's `Precision` field / `--Precision`): **F64** (8 bytes)
-is the exact, gradient-checkable default; **F32** halves weight/tape/worker-pool memory and runs the
-8-lane f32 SIMD kernels (AdamW moments stay f64, and checkpoints keep one stable f64 encoding either
-way). Resumed runs always keep the checkpoint's precision. F32 is the practical choice from Micro up
-on CPU; the largest tiers additionally need a GPU backend.
+Training memory ≈ 4× the weights (weights + gradients + optimizer m/v), plus activations.
 
-The Train panel also carries run-level knobs orthogonal to this table: `Workers` (sequence-parallel
-threads for pretrain AND chat/SFT), `Precision` (above), and — in Chat mode — `From base` (§2).
+### Run knobs — what each one buys and how to pick it
+
+These are the Train-panel fields that are about the RUN, not the architecture. They never change what
+the model can learn — they change speed, memory, and (for `From base`) what the weights start from.
+
+| Knob | What it does | How to pick |
+|------|--------------|-------------|
+| **Workers** | Fans the batch's sequences across that many worker threads — each runs a full forward/backward on its own tape, gradients are reduced deterministically. Parallelizes the WHOLE step (autograd + elementwise + matmuls), which per-kernel threading cannot. Works for pretrain AND chat/SFT. `0` = sequential. | Capped by `Batch` (each worker needs ≥ 1 sequence). **8 is the default sweet spot**; more workers = more concurrent tapes = more RAM, so raise it only with free memory (F32 halves per-worker tape cost, so F32 runs afford more). Drop to 4 if the machine swaps. Measured: 8 workers ≈ 3.8–4.6× over sequential. |
+| **Precision** | Storage width of weights/grads/tape. **F64** (8 B): exact, gradient-checkable — the default. **F32** (4 B): HALF the memory everywhere (weights, tape, every worker's slabs) and the 8-lane f32 SIMD kernels (kernel ~1.7×; whole step ~1.15× today — the serial TS share dominates). AdamW moments stay f64 and checkpoints keep one f64 encoding either way, so nothing else changes. | **Seed/Nano: F64** (memory is trivial; keep exactness). **Micro and up: F32** — memory is the binding constraint there, and F32 is what makes wide worker pools + bigger tapes fit. Resume/warm-start IGNORE this field and keep the checkpoint's width (changing width mid-lineage would reinterpret the weights). |
+| **From base** (Chat mode) | Seeds the chat run's weights from a finished base checkpoint (the pretrain→SFT bridge) instead of random init. Reuses the base tokenizer verbatim; optimizer/schedule start fresh. | **Always set it for a real chat model** — same-tier base, identical Embed/Layers/Heads/Context (hard requirement). Leave "from scratch" only for quick format experiments where the model's language doesn't matter. |
+| **code MB / knowledge MB** (Pretrain) | How many megabytes of each corpus kind feed the base. Code-only → a code model; add knowledge (Wikipedia) for general language. | Scale with the tier (`Corpus MB` column ≈ code + knowledge total). A useful split is ~75% code / 25% knowledge when the chat stage should talk about non-code topics. |
+| **conversation / code samples** (Chat) | How many real dialogues (documents_conversation) and code documents (documents_code) feed SFT, on top of the owned synthetic mix (persona/tools/thinking — CLI knobs with sane defaults). | Conversations drive "talks well" — use the chat table's column below. Code samples ground the language-ID task; 4,000 is a good default, 0 for a pure-chat model. |
 
 ### Steps vs tokens
 
@@ -96,14 +101,20 @@ and `Conversation examples` are the extra chat knobs. Note on vocab: the ~17 **s
 shown, and since the warm-start bridge they are reserved by the PRETRAIN stage too — base and chat
 share one vocab layout, so the model's true vocab is `Vocab + specials` at both stages.
 
-| Chat tier | Embed | Layers | Heads | Context | Vocab | Batch | SFT steps | Conversation examples | Realistically expect |
-|-----------|-------|--------|-------|---------|-------|-------|-----------|-----------------------|----------------------|
-| Seed-chat | 96 | 3 | 4 | 96 | 512 | 16 | ~500–800 | 1k–5k | learns the FORMAT (replies + stops); output mostly incoherent |
-| Nano-chat | 128 | 4 | 4 | 256 | 512 | 16 | ~800–1.5k | 3k–10k | replies + calls tools on seen patterns; still incoherent |
-| Micro-chat | 256 | 6 | 4 | 512 | 1,024 | 16 | ~2k–4k | 10k–50k | short on-topic replies on seen patterns; frequent errors |
-| Mini-chat | 512 | 8 | 8 | 1,024 | 4,096 | 32 | ~8k–15k | 50k–200k | simple coherent Q&A + tool calls; not fluent |
-| Small-chat | 768 | 12 | 12 | 2,048 | 16,384 | 64 | ~20k+ | 200k–1M | basic assistant on narrow tasks (GPT-2-class); needs a GPU |
-| *fluent + senior-level code* | *2,048+* | *32+* | *32+* | *8,192+* | *50,000+* | *256+* | *100k+* | *millions* | *emergent at scale — not reachable from scratch on modest hardware* |
+`Precision` has no chat column: a warm-started run inherits the BASE's width, and a resumed run its
+own checkpoint's — the panel field only matters for a from-scratch chat run (match the tier's §1 row).
+
+| Chat tier | Embed | Layers | Heads | Context | Vocab | Batch | SFT steps | From base | Workers | Conversation examples | Code samples | Realistically expect |
+|-----------|-------|--------|-------|---------|-------|-------|-----------|-----------|---------|-----------------------|--------------|----------------------|
+| Seed-chat | 96 | 3 | 4 | 96 | 512 | 16 | ~500–800 | Seed | 8 | 1k–5k | 1,000 | learns the FORMAT (replies + stops); output mostly incoherent |
+| Nano-chat | 128 | 4 | 4 | 256 | 512 | 16 | ~800–1.5k | Nano | 8 | 3k–10k | 4,000 | replies + calls tools on seen patterns; still incoherent |
+| Micro-chat | 256 | 6 | 4 | 512 | 1,024 | 16 | ~2k–4k | Micro | 8–16 | 10k–50k | 4,000–8,000 | short on-topic replies on seen patterns; frequent errors |
+| Mini-chat | 512 | 8 | 8 | 1,024 | 4,096 | 32 | ~8k–15k | Mini | — (GPU) | 50k–200k | 10,000+ | simple coherent Q&A + tool calls; not fluent |
+| Small-chat | 768 | 12 | 12 | 2,048 | 16,384 | 64 | ~20k+ | Small | — (GPU) | 200k–1M | 20,000+ | basic assistant on narrow tasks (GPT-2-class); needs a GPU |
+| *fluent + senior-level code* | *2,048+* | *32+* | *32+* | *8,192+* | *50,000+* | *256+* | *100k+* | — | — | *millions* | — | *emergent at scale — not reachable from scratch on modest hardware* |
+
+`From base` names the SAME-TIER finished base checkpoint (whatever you named it when pretraining that
+tier) — the architecture columns must match it exactly. "From scratch" is only for format experiments.
 
 ### The data mix (per kind), set from the dashboard
 
