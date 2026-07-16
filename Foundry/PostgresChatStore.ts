@@ -14,7 +14,7 @@ export class PostgresChatStore implements ChatStore {
   private Ready: Promise<void>;
 
   constructor(Url: string) {
-    this.Sql = postgres(Url);
+    this.Sql = postgres(Url, { onnotice: () => {} }); // silence idempotent CREATE-IF-NOT-EXISTS notices
     // Swallow the rejection here so a DB blip at startup can't become an unhandled rejection (which
     // Bun turns into a process exit). The real failure still surfaces when a method awaits a query.
     this.Ready = this.Migrate().catch((Caught) => {

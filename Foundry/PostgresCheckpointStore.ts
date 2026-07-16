@@ -51,7 +51,7 @@ export class PostgresCheckpointStore {
   private Ready: Promise<void>;
 
   constructor(Url: string) {
-    this.Sql = postgres(Url);
+    this.Sql = postgres(Url, { onnotice: () => {} }); // silence idempotent CREATE-IF-NOT-EXISTS notices that spammed the train log
     this.Ready = this.Migrate().catch((Caught) => {
       console.warn(`PostgresCheckpointStore: migration deferred: ${(Caught as Error).message}`);
     });

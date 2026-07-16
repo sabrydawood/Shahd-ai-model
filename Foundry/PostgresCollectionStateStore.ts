@@ -19,7 +19,7 @@ export class PostgresCollectionStateStore implements CollectionStateStore {
 
   constructor(UrlOrSql: string | ReturnType<typeof postgres>) {
     this.OwnsSql = typeof UrlOrSql === "string";
-    this.Sql = typeof UrlOrSql === "string" ? postgres(UrlOrSql) : UrlOrSql;
+    this.Sql = typeof UrlOrSql === "string" ? postgres(UrlOrSql, { onnotice: () => {} }) : UrlOrSql;
     // Swallow the rejection here so a DB blip at startup can't become an unhandled rejection; the real
     // failure resurfaces when a method awaits Ready.
     this.Ready = this.Migrate().catch((Caught) => {

@@ -22,7 +22,7 @@ export class FoundryStores {
   private CollectionStore: PostgresCollectionStateStore | null = null;
 
   constructor(Url: string) {
-    this.Sql = postgres(Url);
+    this.Sql = postgres(Url, { onnotice: () => {} }); // silence idempotent CREATE-IF-NOT-EXISTS notices that spammed the train log
   }
 
   /** The collection ledger (progress/exhausted per source), lazily created on the SAME shared pool. */

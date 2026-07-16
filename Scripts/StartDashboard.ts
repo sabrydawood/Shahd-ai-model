@@ -26,9 +26,10 @@ import { SpecialTokenizer } from "../Brain/Tokenizer/SpecialTokenizer.ts";
 import { RunAgent } from "../Brain/Serving/AgentLoop.ts";
 import type { AgentStep } from "../Brain/Serving/AgentLoop.ts";
 import { FormatTrace, BuildTrace } from "../Brain/Serving/ReasoningTrace.ts";
-import { BuildAgentTooling, RenderToolManifest } from "../Brain/Serving/Tools/ToolsBarrel.ts";
+import { BuildAgentTooling } from "../Brain/Serving/Tools/ToolsBarrel.ts";
+import { OwnedSystemPrompt } from "../Brain/Sft/OwnedSftData.ts";
 import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
-import { DefaultThinkingSystemPrompt, ExtractAnswer, NormalizeAnswer, MajorityVote } from "../Brain/Reasoning/ReasoningBarrel.ts";
+import { ExtractAnswer, NormalizeAnswer, MajorityVote } from "../Brain/Reasoning/ReasoningBarrel.ts";
 import { GenerateAsync } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { SeededRng } from "../Brain/Random/SeededRng.ts";
@@ -110,9 +111,13 @@ const SelfConsistencySamples = Math.max(1, Math.floor(Number(process.env["SHAHD_
 async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Opts: ChatOpts, OnDelta: (Delta: string) => void): Promise<string> {
   const { Model, Tokenizer, Config } = Loaded;
   const Tooling = BuildAgentTooling(Config);
-  // The canonical thinking system prompt (single source of truth shared with SFT) + the tool manifest,
-  // so the model is asked at serving to do exactly what it was trained to do: think, then answer.
-  const SystemPrompt = DefaultThinkingSystemPrompt + "\n\n" + RenderToolManifest(Tooling.Registry.List());
+  // TRAIN/SERVE PROMPT PARITY: the SFT tool/persona/arithmetic conversations were trained with the
+  // short OwnedSystemPrompt and NO tool manifest — the tool-call FORMAT lives in the weights. The
+  // previous prompt here (thinking preamble + a 20-tool rendered manifest) was hundreds of tokens the
+  // model never saw in training and overflowed ctx=256 outright, so the model answered arithmetic
+  // questions with language names (verified live). Tiny models do not survive prompt-distribution
+  // drift; serve them EXACTLY what they were trained on.
+  const SystemPrompt = OwnedSystemPrompt;
 
   // One full agent run over a FRESH session (so N self-consistency runs don't contaminate each other).
   const RunOnce = async (): Promise<{ Text: string; Steps: AgentStep[] }> => {

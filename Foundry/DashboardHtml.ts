@@ -9,7 +9,7 @@
 import { DashboardStyles } from "./DashboardStyles.ts";
 import { DashboardScript } from "./DashboardScript.ts";
 
-export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shahd — Control Plane</title>
+export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shahd — Control Plane</title><link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>">
 <style>${DashboardStyles}</style></head><body>
 <div class="app">
  <aside class="side" id="side">
@@ -122,7 +122,7 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
       <h3>Architecture</h3>
       <div class="row c2" style="margin-bottom:11px"><div><label class="f">Model name</label><input class="i" id="t-name" value="foundry"></div><div><label class="f">Steps</label><input class="i tnum" id="t-steps" type="number" value="500"></div></div>
       <div class="row c4" style="margin-bottom:11px"><div><label class="f">Embed</label><input class="i tnum" id="t-embed" type="number" value="96"></div><div><label class="f">Layers</label><input class="i tnum" id="t-layers" type="number" value="3"></div><div><label class="f">Heads</label><input class="i tnum" id="t-heads" type="number" value="4"></div><div><label class="f">Context</label><input class="i tnum" id="t-ctx" type="number" value="96"></div></div>
-      <div class="row c3"><div><label class="f">Vocab</label><input class="i tnum" id="t-vocab" type="number" value="512"></div><div><label class="f">Batch</label><input class="i tnum" id="t-batch" type="number" value="16"></div><div><label class="f" title="Sequence-parallel worker threads (pretrain only; 0 = sequential). 8 is the sweet spot on this machine.">Workers</label><input class="i tnum" id="t-workers" type="number" value="8"></div></div>
+      <div class="row c3"><div><label class="f">Vocab</label><input class="i tnum" id="t-vocab" type="number" value="512"></div><div><label class="f">Batch</label><input class="i tnum" id="t-batch" type="number" value="16"></div><div><label class="f" title="Sequence-parallel worker threads for pretrain AND chat/SFT (0 = sequential). 8 is the sweet spot on this 16GB machine; 16 needs several GB of free RAM.">Workers</label><input class="i tnum" id="t-workers" type="number" value="8"></div></div>
       <h3 style="margin-top:20px">Data mix — how much of each kind</h3>
       <div class="row c2" id="t-mix-pretrain"><div><label class="f"><span class="pill code">code</span> MB</label><input class="i tnum" id="t-corpus" type="number" step="0.5" value="1.5"></div><div><label class="f"><span class="pill know">knowledge</span> MB</label><input class="i tnum" id="t-know" type="number" value="0"></div></div>
       <div class="row c2" id="t-mix-chat" style="display:none"><div><label class="f"><span class="pill conv">conversation</span> examples</label><input class="i tnum" id="t-conv" type="number" value="4000"></div><div><label class="f"><span class="pill code">code</span> samples</label><input class="i tnum" id="t-code" type="number" value="4000"></div></div>

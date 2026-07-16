@@ -11,7 +11,12 @@ import { BuildToolConversation, ToolUseExemplars } from "./ToolUseExamples.ts";
 import { WrapThinkingAnswer, DefaultThinkingSystemPrompt } from "../Reasoning/AnswerExtraction.ts";
 import type { SeededRng } from "../Random/SeededRng.ts";
 
-const System = "You are Shahd, a helpful coding assistant.";
+// EXPORTED because serving must present the model with the SAME system prompt it was trained on:
+// a 2.5M surface-level model does not generalize across system prompts, and serving it a long
+// unseen preamble (e.g. a rendered tool manifest, which training never included) collapses its
+// behavior to the dominant pattern regardless of the question.
+export const OwnedSystemPrompt = "You are Shahd, a helpful coding assistant.";
+const System = OwnedSystemPrompt;
 
 // A fixed persona so the model has one consistent voice to imitate.
 const Persona: readonly [string, string][] = [

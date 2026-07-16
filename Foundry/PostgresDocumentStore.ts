@@ -62,7 +62,7 @@ export class PostgresDocumentStore implements DocumentStore {
   // stores can share ONE connection pool instead of opening one each — see FoundryStores).
   constructor(UrlOrSql: string | ReturnType<typeof postgres>, TableName = "documents") {
     this.OwnsSql = typeof UrlOrSql === "string";
-    this.Sql = typeof UrlOrSql === "string" ? postgres(UrlOrSql) : UrlOrSql;
+    this.Sql = typeof UrlOrSql === "string" ? postgres(UrlOrSql, { onnotice: () => {} }) : UrlOrSql;
     this.Db = drizzle(this.Sql);
     this.Table = DocumentsTable(TableName);
   }
