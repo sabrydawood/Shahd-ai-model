@@ -1,7 +1,7 @@
 // Control-plane client logic (M14 rebuild). One WebSocket (/ws) for realtime system/model/stats/learn/
 // train + load-model; REST for /api/kinds, /api/checkpoints, /api/browse* , /api/system, /api/model.
-// Six views (Overview/Collect/Data/Train/Models/System) switched by a hash router; Chat is the
-// dedicated /chat page (linked). IMPORTANT: this is inlined into a backtick template in
+// Seven views (Overview/Collect/Data/Train/Models/Chat/System) switched by a hash router; #chat is
+// the trace-capable chat surface (the legacy /chat page has no trace). IMPORTANT: this is inlined into a backtick template in
 // DashboardHtml.ts — it MUST stay free of backticks, ${ ... } and the closing script sequence; all
 // strings use single quotes + concatenation. Kept in its own file so each file stays small.
 export const DashboardScript = `
@@ -75,7 +75,7 @@ export const DashboardScript = `
    +'<div style="color:var(--mut);font-size:12.5px;margin:3px 0 14px">'+fmtN(m.TotalParams)+' params · emb'+m.EmbedDim+' · L'+m.NumLayers+' · ctx'+m.BlockSize+'</div>'
    +'<div class="row c2"><div><div class="k" style="font-size:11px;color:var(--mut)">VOCAB</div><div class="mono" style="font-size:15px">'+fmtN(m.VocabSize)+'</div></div>'
    +'<div><div class="k" style="font-size:11px;color:var(--mut)">POSITION / NORM</div><div class="mono" style="font-size:15px">'+H(m.PositionScheme)+' / '+H(m.NormKind)+'</div></div></div>'
-   +'<div style="display:flex;gap:8px;margin-top:16px"><button class="btn pri sm" onclick="location.href=\\'/chat\\'">Open in Chat</button></div>';
+   +'<div style="display:flex;gap:8px;margin-top:16px"><button class="btn pri sm" onclick="location.hash=\\'#chat\\'">Open in Chat</button></div>';
  }
  function setJobs(){var t=collecting?'Collecting':training?'Training':'Idle';Q('ov-jobs').textContent=t;Q('ov-jobs-s').textContent=(collecting||training)?'run in progress':'no run in progress';}
 
@@ -243,7 +243,9 @@ export const DashboardScript = `
     +'<td><div class="acts"><button class="btn sm'+(loaded?'':' pri')+'" onclick="openModel(\\''+H(c.Name)+'\\')">Open in Chat</button>'
     +'<button class="btn sm" onclick="resumeModel(\\''+H(c.Name)+'\\')">Resume training</button>'
     +'<button class="btn sm danger" onclick="deleteModel(\\''+H(c.Name)+'\\')">Delete</button></div></td></tr>';}).join('');}
- function openModel(name){if(wsReady())WS.send(JSON.stringify({type:'load-model',name:name}));location.href='/chat';}
+ // The SPA #chat view is the ONLY surface that renders the reasoning trace (the legacy /chat page has
+ // no chat-trace handler) — so "Open in Chat" must land there, not on the trace-blind page.
+ function openModel(name){if(wsReady())WS.send(JSON.stringify({type:'load-model',name:name}));location.hash='#chat';}
  async function deleteModel(name){if(!confirm('Delete model "'+name+'" permanently? This cannot be undone.'))return;
   await fetch('/api/checkpoint/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})});loadCheckpoints();loadOverview();}
 
