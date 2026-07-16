@@ -40,6 +40,14 @@ export function Backward(Root: Tensor): void {
   Root.Grad.fill(1);
   for (let I = Topo.length - 1; I >= 0; I--) {
     const Node = Topo[I];
-    if (Node !== undefined) Node.BackwardFn();
+    if (Node === undefined) continue;
+    Node.BackwardFn();
+    // Release-on-consume: in reverse-topological order every consumer of Node has already run,
+    // and Node's own BackwardFn (the last reader of its Data/Grad) just fired — so an INTERIOR
+    // node's buffers are provably dead here. Freeing them as we walk keeps backward's footprint
+    // FLAT instead of holding the whole step's tape until GC catches up (that 2x-tape residue is
+    // what OOM'd wide training worker pools). Leaves (Prev empty — params, whose grads the
+    // optimizer consumes next) and the Root (the caller reads its value) are kept.
+    if (Node !== Root && Node.Prev.length > 0) Node.ReleaseBuffers();
   }
 }
