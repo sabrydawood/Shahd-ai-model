@@ -35,6 +35,10 @@ import (
 // matmul_avx.c — it is what makes the range split worth aligning.
 const RowBlock = 8
 
+// Transpose elements per goroutine (~32 KB of float64, about an L1 working set). Sets how wide the
+// B-transpose fans out; see the worker-count comment in MatMulF64 for why it is size-driven.
+const TransposeChunk = 4096
+
 // Reusable B-transpose scratch. The kernel is called thousands of times per training step and a fresh
 // make() per call was pure allocator/GC churn (hundreds of KB each, at this model's shapes).
 var BtPool = sync.Pool{
@@ -53,30 +57,61 @@ func MatMulF64(a *C.double, b *C.double, out *C.double, m C.int, k C.int, n C.in
 	N := int(n)
 	B := unsafe.Slice((*float64)(unsafe.Pointer(b)), K*N)
 
+	Workers := runtime.NumCPU()
+	if Workers < 1 {
+		Workers = 1
+	}
+
 	// (1) Transpose B -> BT[N,K] once, so the dot loop streams A[i,:] and BT[j,:] contiguously and the
-	// C kernel can vector-load both.
+	// C kernel can vector-load both. Done IN PARALLEL: a transpose is pure memory traffic (65k+ elements
+	// at this model's shapes) and running it on one thread before the workers start made it Amdahl's
+	// serial fraction INSIDE the kernel. Splitting by output row (j) also gives each worker a contiguous
+	// BT write range, so cores do not fight over the same cache lines.
 	BtRef := BtPool.Get().(*[]float64)
 	if cap(*BtRef) < N*K {
 		*BtRef = make([]float64, N*K)
 	}
 	BT := (*BtRef)[:N*K]
-	for p := 0; p < K; p++ {
-		pN := p * N
-		for j := 0; j < N; j++ {
-			BT[j*K+p] = B[pN+j]
-		}
+	// Worker count scales with transpose SIZE, not CPU count. Measured: fanning the wide MLP/LM-head
+	// transposes (~65k elements) across all cores wins ~1.4-1.6x, but doing the same to the narrow
+	// attention projections (~4k elements) LOSES ~30% — goroutine spawn/join costs more than the
+	// transpose itself at that size. One worker per TransposeChunk elements lets each shape pick.
+	TWorkers := (N * K) / TransposeChunk
+	if TWorkers > Workers {
+		TWorkers = Workers
 	}
+	if TWorkers > N {
+		TWorkers = N
+	}
+	if TWorkers < 1 {
+		TWorkers = 1
+	}
+	JPer := (N + TWorkers - 1) / TWorkers
+	var TWg sync.WaitGroup
+	for J0 := 0; J0 < N; J0 += JPer {
+		J1 := J0 + JPer
+		if J1 > N {
+			J1 = N
+		}
+		TWg.Add(1)
+		go func(JStart, JEnd int) {
+			defer TWg.Done()
+			for j := JStart; j < JEnd; j++ {
+				jK := j * K
+				for p := 0; p < K; p++ {
+					BT[jK+p] = B[p*N+j]
+				}
+			}
+		}(J0, J1)
+	}
+	TWg.Wait()
 	BtPtr := (*C.double)(unsafe.Pointer(&BT[0])) // Go memory, but C never retains it past the call
 
 	// (2) Split the M rows across goroutines — one worker per CPU, capped by row count, each range
 	// snapped UP to a RowBlock multiple so workers run the C kernel's blocked fast path instead of
 	// straddling a block boundary (which would drop rows into its slower one-at-a-time remainder loop).
-	Workers := runtime.NumCPU()
 	if Workers > M {
 		Workers = M
-	}
-	if Workers < 1 {
-		Workers = 1
 	}
 	RowsPer := (M + Workers - 1) / Workers
 	RowsPer = ((RowsPer + RowBlock - 1) / RowBlock) * RowBlock
