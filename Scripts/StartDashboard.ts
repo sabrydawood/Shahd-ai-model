@@ -407,7 +407,7 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
   ];
   const Args = Settings.Kind === "chat"
     ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common, `--CodeSamples=${Settings.CodeSamples}`, `--ConvCount=${Settings.ConvCount}`]
-    : ["bun", "run", "Scripts/TrainOnFoundry.ts", ...Common, `--CorpusMb=${Settings.CorpusMb}`, `--KnowledgeMb=${Settings.KnowledgeMb}`];
+    : ["bun", "run", "Scripts/TrainOnFoundry.ts", ...Common, `--CorpusMb=${Settings.CorpusMb}`, `--KnowledgeMb=${Settings.KnowledgeMb}`, `--Workers=${Settings.Workers ?? 0}`];
   console.log(`[train] ${Settings.Kind} "${Settings.Name}": ${Settings.Steps} steps`);
   const Proc = Bun.spawn(Args, { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
   const OnAbort = (): void => {

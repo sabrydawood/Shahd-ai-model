@@ -50,6 +50,9 @@ export type TrainSettings = {
   BlockSize: number;
   Merges: number; // vocab = 256 + Merges
   BatchSize: number;
+  // Sequence-parallel worker threads for PRETRAIN (Config.Training.Workers; 0/absent = sequential).
+  // Chat/SFT ignores it — variable-length batches are rejected by the pool by design.
+  Workers?: number;
   // Per-kind data amounts (the mix): pretrain reads CorpusMb of code + KnowledgeMb of knowledge; chat
   // SFT reads CodeSamples code docs + ConvCount real dialogues. Set any to 0 for a pure-kind model.
   KnowledgeMb: number;

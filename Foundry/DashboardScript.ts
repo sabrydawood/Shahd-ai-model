@@ -24,7 +24,7 @@ export const DashboardScript = `
  // MODEL-SCALING presets — a COMPLETE one-click config: [Embed,Layers,Heads,Context,Vocab,Batch,
  // Steps, CodeMb,KnowledgeMb (pretrain mix), ConvCount,CodeSamples (chat mix)]. So picking a tier fills
  // the architecture AND the data mix for both modes; adjust any field after.
- var PRESETS={Seed:[96,3,4,96,512,16,6000,2,0,3000,2000],Nano:[128,4,4,256,512,16,5000,3,0,6000,3000],Micro:[256,6,4,512,1024,16,16000,8,0,20000,8000],Mini:[512,8,8,1024,4096,32,22000,30,0,100000,30000],Small:[768,12,12,2048,16384,64,19000,80,0,300000,80000],Base:[1024,24,16,4096,32000,128,17000,200,0,500000,150000],Large:[2048,32,32,8192,50000,256,22000,500,0,1000000,300000]};
+ var PRESETS={Seed:[96,3,4,96,512,16,6000,2,0,3000,2000,4],Nano:[128,4,4,256,512,16,5000,3,0,6000,3000,8],Micro:[256,6,4,512,1024,16,16000,8,0,20000,8000,8],Mini:[512,8,8,1024,4096,32,22000,30,0,100000,30000,8],Small:[768,12,12,2048,16384,64,19000,80,0,300000,80000,8],Base:[1024,24,16,4096,32000,128,17000,200,0,500000,150000,8],Large:[2048,32,32,8192,50000,256,22000,500,0,1000000,300000,8]};
 
  // ── theme ──
  function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('shahd.theme',t);}catch(e){}Q('themebtn').textContent=t==='dark'?'☀':'☾';}
@@ -178,7 +178,7 @@ export const DashboardScript = `
  // ── Train ──
  var tMode='pretrain';
  function setMode(m){tMode=m;Q('t-mode-pre').classList.toggle('on',m==='pretrain');Q('t-mode-chat').classList.toggle('on',m==='chat');Q('t-mix-pretrain').style.display=m==='pretrain'?'':'none';Q('t-mix-chat').style.display=m==='chat'?'':'none';}
- function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];Q('t-corpus').value=p[7];Q('t-know').value=p[8];Q('t-conv').value=p[9];Q('t-code').value=p[10];}
+ function onPreset(){var p=PRESETS[Q('t-preset').value];if(!p)return;Q('t-embed').value=p[0];Q('t-layers').value=p[1];Q('t-heads').value=p[2];Q('t-ctx').value=p[3];Q('t-vocab').value=p[4];Q('t-batch').value=p[5];Q('t-steps').value=p[6];Q('t-corpus').value=p[7];Q('t-know').value=p[8];Q('t-conv').value=p[9];Q('t-code').value=p[10];Q('t-workers').value=p[11];}
  function renderResumeOptions(){var sel=Q('t-resume');var cur=sel.value;
   sel.innerHTML='<option value="">◇ New model</option>'+checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">↻ '+H(c.Name)+' ('+H(c.Format)+', step '+fmtN(c.Step)+')</option>';}).join('');
   sel.value=cur;}
@@ -195,7 +195,7 @@ export const DashboardScript = `
  function trainSettings(){var vocab=+Q('t-vocab').value||512;
   return {Kind:tMode,Name:Q('t-name').value,Resume:!!Q('t-resume').value,Steps:+Q('t-steps').value,
    CorpusMb:+Q('t-corpus').value,EmbedDim:+Q('t-embed').value,NumLayers:+Q('t-layers').value,NumHeads:+Q('t-heads').value,
-   BlockSize:+Q('t-ctx').value,Merges:Math.max(0,vocab-256),BatchSize:+Q('t-batch').value,
+   BlockSize:+Q('t-ctx').value,Merges:Math.max(0,vocab-256),BatchSize:+Q('t-batch').value,Workers:+Q('t-workers').value,
    KnowledgeMb:+Q('t-know').value,ConvCount:+Q('t-conv').value,CodeSamples:+Q('t-code').value};}
  function tStart(){if(!wsReady())return;save();WS.send(JSON.stringify({type:'train',settings:trainSettings()}));}
  function tStop(){if(wsReady()){WS.send(JSON.stringify({type:'train-stop'}));Q('t-start').textContent='stopping…';Q('t-start').disabled=true;}}
@@ -287,7 +287,7 @@ export const DashboardScript = `
   };}
 
  // ── settings persistence ──
- var FIELDS=['c-query','c-repos','c-minlevel','c-maxrepos','c-maxfiles','c-maxmb','c-maxkb','c-skip','t-name','t-steps','t-embed','t-layers','t-heads','t-ctx','t-vocab','t-batch','t-corpus','t-know','t-conv','t-code'];
+ var FIELDS=['c-query','c-repos','c-minlevel','c-maxrepos','c-maxfiles','c-maxmb','c-maxkb','c-skip','t-name','t-steps','t-embed','t-layers','t-heads','t-ctx','t-vocab','t-batch','t-workers','t-corpus','t-know','t-conv','t-code'];
  function save(){var o={};FIELDS.forEach(function(id){var el=Q(id);if(!el)return;o[id]=el.type==='checkbox'?el.checked:el.value;});try{localStorage.setItem('shahd.cfg',JSON.stringify(o));}catch(e){}}
  function restore(){try{var o=JSON.parse(localStorage.getItem('shahd.cfg')||'{}');FIELDS.forEach(function(id){if(o[id]===undefined)return;var el=Q(id);if(!el)return;if(el.type==='checkbox')el.checked=!!o[id];else el.value=o[id];});}catch(e){}}
 
