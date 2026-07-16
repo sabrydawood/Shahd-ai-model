@@ -15,11 +15,13 @@ import { ParseCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
 // so far (for the dashboard's "resume/extend from step N"). Embed/Layers/Heads/Block are the exact
 // architecture — the dashboard's "Resume training" prefills them so a re-run matches the checkpoint's
 // arch exactly (a NumHeads mismatch would otherwise silently retrain from scratch). All from the Meta.
-export type CheckpointSummary = { Name: string; CreatedAt: string; Params: number; Vocab: number; Arch: string; Corpus: string; Format: string; Step: number; Embed: number; Layers: number; Heads: number; Block: number };
+// Batch/Lr/MaxSteps carry the TRAINING SEMANTICS a resumed run inherits — the dashboard prefills
+// (and locks) them so what the form shows matches what the server will actually do.
+export type CheckpointSummary = { Name: string; CreatedAt: string; Params: number; Vocab: number; Arch: string; Corpus: string; Format: string; Step: number; Embed: number; Layers: number; Heads: number; Block: number; Batch: number; Lr: number; MaxSteps: number };
 
 type MetaRow = { name: string; created_at: string; meta: string };
 type DataRow = { data: string };
-type StoredMeta = { params: number; vocab: number; arch: string; corpus: string; format: string; step: number; embed: number; layers: number; heads: number; block: number };
+type StoredMeta = { params: number; vocab: number; arch: string; corpus: string; format: string; step: number; embed: number; layers: number; heads: number; block: number; batch: number; lr: number; maxSteps: number };
 
 function MetaOf(Ckpt: Checkpoint): StoredMeta {
   const Meta = Ckpt.Meta as Record<string, unknown>;
@@ -38,6 +40,9 @@ function MetaOf(Ckpt: Checkpoint): StoredMeta {
     layers: M.NumLayers,
     heads: M.NumHeads,
     block: M.BlockSize,
+    batch: Ckpt.Config.Training.BatchSize,
+    lr: Ckpt.Config.Optimizer.LearningRate,
+    maxSteps: Ckpt.Config.Schedule.MaxSteps,
   };
 }
 
@@ -91,6 +96,9 @@ export class PostgresCheckpointStore {
         Layers: M.layers ?? 0,
         Heads: M.heads ?? 0,
         Block: M.block ?? 0,
+        Batch: M.batch ?? 0, // 0 = an older checkpoint predating these fields; the UI skips prefill
+        Lr: M.lr ?? 0,
+        MaxSteps: M.maxSteps ?? 0,
       };
     });
   }

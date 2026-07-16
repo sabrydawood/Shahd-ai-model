@@ -183,10 +183,14 @@ export const DashboardScript = `
   sel.innerHTML='<option value="">◇ New model</option>'+checkpoints.map(function(c){return '<option value="'+H(c.Name)+'">↻ '+H(c.Name)+' ('+H(c.Format)+', step '+fmtN(c.Step)+')</option>';}).join('');
   sel.value=cur;}
  function onResume(){var name=Q('t-resume').value;var note=Q('t-resumenote');
-  if(!name){note.style.display='none';return;}
-  var c=checkpoints.filter(function(x){return x.Name===name;})[0];if(!c){note.style.display='none';return;}
+  if(!name){note.style.display='none';setArchLock(false);setTrainBtn(training);return;}
+  var c=checkpoints.filter(function(x){return x.Name===name;})[0];if(!c){note.style.display='none';setArchLock(false);setTrainBtn(training);return;}
   Q('t-name').value=c.Name;setMode(c.Format==='chat'?'chat':'pretrain');prefillArch(c);
-  note.style.display='';note.innerHTML='Will <b>continue</b> "'+H(c.Name)+'" from step '+fmtN(c.Step)+' — raise Steps to train it further (same architecture is kept).';}
+  if(c.Batch)Q('t-batch').value=c.Batch;
+  if(c.MaxSteps)Q('t-steps').value=c.MaxSteps;
+  setArchLock(true);setTrainBtn(training);
+  note.style.display='';note.innerHTML='Will <b>continue</b> "'+H(c.Name)+'" from step '+fmtN(c.Step)+' — architecture + batch + optimizer are <b>inherited from the checkpoint</b> (locked here); raise Steps above '+fmtN(c.MaxSteps||c.Step)+' to train it further.';}
+ function setArchLock(on){['t-embed','t-layers','t-heads','t-ctx','t-vocab','t-batch'].forEach(function(id){var el=Q(id);if(el)el.disabled=on;});}
  function prefillArch(c){
   if(c.Embed){Q('t-embed').value=c.Embed;Q('t-layers').value=c.Layers;Q('t-heads').value=c.Heads;Q('t-ctx').value=c.Block;}
   else{var mm=/emb(\\d+)\\s*L(\\d+)\\s*ctx(\\d+)/.exec(c.Arch||'');if(mm){Q('t-embed').value=mm[1];Q('t-layers').value=mm[2];Q('t-ctx').value=mm[3];}}
@@ -199,7 +203,10 @@ export const DashboardScript = `
    KnowledgeMb:+Q('t-know').value,ConvCount:+Q('t-conv').value,CodeSamples:+Q('t-code').value};}
  function tStart(){if(!wsReady())return;save();WS.send(JSON.stringify({type:'train',settings:trainSettings()}));}
  function tStop(){if(wsReady()){WS.send(JSON.stringify({type:'train-stop'}));Q('t-start').textContent='stopping…';Q('t-start').disabled=true;}}
- function setTrainBtn(run){training=run;setJobs();var b=Q('t-start');b.disabled=false;b.textContent=run?'■ Stop (keeps last checkpoint)':'▶ Train model';b.className='btn '+(run?'danger':'pri');b.onclick=run?tStop:tStart;}
+ function setTrainBtn(run){training=run;setJobs();var b=Q('t-start');b.disabled=false;
+  var rn=Q('t-resume')?Q('t-resume').value:'';var rc=rn?checkpoints.filter(function(x){return x.Name===rn;})[0]:null;
+  b.textContent=run?'■ Stop (keeps last checkpoint)':(rc?'⏵ Resume from step '+fmtN(rc.Step):'▶ Train model');
+  b.className='btn '+(run?'danger':'pri');b.onclick=run?tStop:tStart;}
  function sparkTipInit(){var w=Q('t-spark');var tip=Q('t-tip');if(!w||!tip||w.dataset.tip)return;w.dataset.tip='1';
   w.addEventListener('mousemove',function(ev){var n=lossHistory.length;if(!n){tip.style.display='none';return;}
    var r=w.getBoundingClientRect();var fx=Math.max(0,Math.min(1,(ev.clientX-r.left)/r.width));
