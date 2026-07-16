@@ -52,12 +52,18 @@ const Fresh = ReadFlag("--Fresh"); // explicit overwrite of a same-name model (b
 // (Wikipedia) is NOT dialogue — it belongs to pretraining, not chat SFT.
 const CodeSamples = Number(ReadArg("--CodeSamples=", "4000"));
 const ConvCount = Number(ReadArg("--ConvCount=", "4000"));
+// Owned-mix balance. The original 200/120/1500 skewed the distribution ~7:1 toward code-language-ID,
+// and the trained model answered arithmetic questions with a language name — the behaviors that need
+// TOOL CALLS and THINKING must carry comparable weight to the ones that answer directly.
+const ArithmeticCount = Number(ReadArg("--Arithmetic=", "2000"));
+const ThinkingCount = Number(ReadArg("--Thinking=", "800"));
+const CodeConvs = Number(ReadArg("--CodeConvs=", "800"));
 const Stores = ResolveFoundryStores();
 const CodeDocs = await Stores.Kind("code").ByTier("Filtered", CodeSamples);
 const ConvDocs = await Stores.Kind("conversation").ByTier("Filtered", ConvCount);
 const Samples: CodeSample[] = CodeDocs.map((D) => ({ Lang: D.Lang, Content: D.Content }));
 const Rng = CreateRngStreams(1234);
-const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { ArithmeticCount: 200, ThinkingCount: 120, PersonaRepeats: 25, MaxCodeConversations: 1500 });
+const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { ArithmeticCount, ThinkingCount, PersonaRepeats: 25, MaxCodeConversations: CodeConvs });
 
 // Parse each collected conversation doc ("User: …\n\nAssistant: …") into an SFT example so the chat
 // model learns from real dialogue — the link that makes "collect conversation data -> the model talks".
