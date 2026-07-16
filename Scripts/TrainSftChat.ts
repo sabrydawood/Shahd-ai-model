@@ -29,6 +29,7 @@ import { ApplyCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
 import type { Checkpoint } from "../Brain/Checkpoint/CheckpointFormat.ts";
 import { PostgresCheckpointStore } from "../Foundry/PostgresCheckpointStore.ts";
 import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
+import { CreateTrainWorkerPool } from "../Brain/Training/WorkerPool.ts";
 import { StripThinking } from "../Brain/Reasoning/ThinkingMode.ts";
 import { ResolveFoundryStores } from "./FoundryEnv.ts";
 import { ReadArg, ReadFlag } from "./ScriptArgs.ts";
@@ -150,8 +151,12 @@ if (Resume !== null) {
   ApplyCheckpoint(Resume.Ckpt, Model, Optimizer, Rng); // restore weights + optimizer + RNG state
   StartStep = Resume.Step;
 }
+// Sequence-parallel pool (after ApplyCheckpoint so the shared weights start from the restored
+// values). Batch size comes from the RESOLVED config — on resume it is the checkpoint's, not the CLI's.
+const EffBatch = Config.Training.BatchSize;
+const Pool = Config.Training.Workers > 0 ? await CreateTrainWorkerPool(Model, Config, "sft") : null;
 const Params = Model.Parameters().reduce((A, P) => A + P.Size, 0);
-console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${Steps} SFT steps`);
+console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}${Pool !== null ? `; ${Pool.WorkerCount} workers` : ""}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${Steps} SFT steps`);
 
 // 5) SFT loop: masked forward/backward over a batch, divide accumulated grad by batch, clip, step.
 // (CkptStore was opened above for resume detection; reused here for periodic + final saves.)
@@ -164,20 +169,30 @@ function BuildAt(Step: number): Checkpoint {
 const CheckEvery = Math.max(50, Math.floor(Steps / 20));
 for (let Step = StartStep; Step < Steps; Step++) {
   const CurrentLr = ComputeLr(Step, Config);
-  Optimizer.ZeroGrad();
-  let Loss = 0;
-  for (let B = 0; B < BatchSize; B++) {
-    const Seq = Rendered[Math.floor(Rng.DataRng.NextFloat() * Rendered.length)]!;
-    Loss += SftForwardBackward(Model, Seq);
+  let MeanLoss: number;
+  if (Pool !== null) {
+    // The main thread draws the batch with the SAME RNG calls as the sequential path (identical
+    // data stream); the pool runs the sequences, reduces, and applies the 1/batch scaling.
+    const Batch: TrainingSequence[] = [];
+    for (let B = 0; B < EffBatch; B++) Batch.push(Rendered[Math.floor(Rng.DataRng.NextFloat() * Rendered.length)]!);
+    MeanLoss = Pool.AccumulateSft(Batch);
+  } else {
+    Optimizer.ZeroGrad();
+    let Loss = 0;
+    for (let B = 0; B < EffBatch; B++) {
+      const Seq = Rendered[Math.floor(Rng.DataRng.NextFloat() * Rendered.length)]!;
+      Loss += SftForwardBackward(Model, Seq);
+    }
+    const Inv = 1 / EffBatch;
+    for (const P of Optimizer.Params) for (let I = 0; I < P.Size; I++) P.Grad[I] *= Inv;
+    MeanLoss = Loss * Inv;
   }
-  const Inv = 1 / BatchSize;
-  for (const P of Optimizer.Params) for (let I = 0; I < P.Size; I++) P.Grad[I] *= Inv;
   ClipGradGlobalNorm(Optimizer.Params, Config.Optimizer.GradClipNorm);
   Optimizer.Step(CurrentLr);
   const ElapsedMs = Date.now() - GlobalStart;
   const StepMs = ElapsedMs - LastElapsedMs;
   LastElapsedMs = ElapsedMs;
-  console.log(JSON.stringify({ Step, TrainLoss: Math.round(Loss * Inv * 1e4) / 1e4, StepMs: Math.round(StepMs), ElapsedMs }));
+  console.log(JSON.stringify({ Step, TrainLoss: Math.round(MeanLoss * 1e4) / 1e4, StepMs: Math.round(StepMs), ElapsedMs }));
   if (CkptStore !== null && (Step + 1) % CheckEvery === 0) {
     await CkptStore.Save(Name, BuildAt(Step + 1), new Date().toISOString());
     console.log(`checkpoint "${Name}" saved at step ${Step + 1}/${Steps}`);
@@ -198,4 +213,5 @@ for (const Probe of ["hi", "What is 7 + 5?"]) {
   const Text = Tokenizer.Decode(Out.slice(Tokenizer.Encode(Prompt).length));
   console.log(`[probe] "${Probe}" -> ${JSON.stringify(StripThinking(Text).slice(0, 100))}`);
 }
+Pool?.Dispose();
 process.exit(0);
