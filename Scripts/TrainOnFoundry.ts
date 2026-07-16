@@ -14,6 +14,8 @@ import { BytePairEncoder } from "../Brain/Tokenizer/BytePairEncoder.ts";
 import { SpecialTokenizer } from "../Brain/Tokenizer/SpecialTokenizer.ts";
 import { SpecialTokens } from "../Brain/Tokenizer/SpecialTokens.ts";
 import { FimTokens } from "../Brain/Data/FimReformat.ts";
+import { ChatTokenList } from "../Brain/Sft/ChatTemplate.ts";
+import { ToolTokenList } from "../Brain/Serving/ToolProtocol.ts";
 import { SplitAndEncodeDocuments } from "../Brain/Data/TrainValSplit.ts";
 import { DedupedIndices } from "../Brain/Data/NearDedup.ts";
 import { InMemoryDataLoader } from "../Brain/Data/DataLoader.ts";
@@ -32,10 +34,16 @@ import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
 import { ResolveFoundryStores } from "./FoundryEnv.ts";
 import { ReadArg, ReadFlag } from "./ScriptArgs.ts";
 
-// Specials reserved above the BPE vocab: EOS plus the FIM sentinels (reserved unconditionally so a
-// later FimFraction-enabled run — or resume of one — doesn't shift the vocab / token ids).
+// Specials reserved above the BPE vocab: EOS + the FIM sentinels + the chat/tool control tokens —
+// all reserved unconditionally so a later run (or resume of one) doesn't shift the vocab / token ids.
+// The chat/tool specials never appear in the pretraining stream (EncodeBase + no chat data), so their
+// embeddings stay at init here; reserving them is what lets a chat SFT run WARM-START from this base
+// (TrainSftChat --From) with an IDENTICAL tokenizer/vocab, and the SFT stage trains them.
+// ⚠ This changes the vocab offset: base checkpoints saved before the reservation no longer resume
+// (the guard below rejects them cleanly — retrain, which the bigger-model plan does anyway).
 const FimSpecials = Object.values(FimTokens);
-const NumSpecials = 1 + FimSpecials.length;
+const BaseSpecials = [SpecialTokens.Eos, ...FimSpecials, ...ChatTokenList, ...ToolTokenList];
+const NumSpecials = BaseSpecials.length;
 
 const CorpusMb = Number(ReadArg("--CorpusMb=", "3"));
 const NumMerges = Number(ReadArg("--Merges=", "256")); // vocab = 256 + merges
@@ -134,7 +142,7 @@ if (CkptStore !== null && !Measure && !Fresh) {
 const T0 = Date.now();
 const Bpe = Resume !== null ? { Merges: Resume.Merges } : TrainBpe(CorpusText, NumMerges);
 const BaseTok = new BytePairEncoder(Bpe);
-const Tokenizer = new SpecialTokenizer(BaseTok, [SpecialTokens.Eos, ...FimSpecials]);
+const Tokenizer = new SpecialTokenizer(BaseTok, BaseSpecials);
 const EosId = Tokenizer.Id(SpecialTokens.Eos);
 console.log(`bpe: ${Bpe.Merges.length} merges -> vocab ${Tokenizer.VocabSize}${Resume !== null ? " (reused from checkpoint)" : `; trained in ${((Date.now() - T0) / 1000).toFixed(1)}s`}`);
 
@@ -203,7 +211,7 @@ if (Measure) {
 // and re-running resumes from the last saved checkpoint (nothing done is thrown away).
 const CheckEvery = Math.max(50, Math.floor(EffectiveSteps / 20)); // ~20 saves across the run
 function BuildAt(Step: number): Checkpoint {
-  return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: EffectiveSteps, Step, Corpus: "foundry-filtered" }, { Kind: "Bpe", Merges: Bpe.Merges, Specials: [SpecialTokens.Eos, ...FimSpecials] });
+  return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: EffectiveSteps, Step, Corpus: "foundry-filtered" }, { Kind: "Bpe", Merges: Bpe.Merges, Specials: BaseSpecials });
 }
 for (let Start = StartStep; Start < EffectiveSteps; Start += CheckEvery) {
   const End = Math.min(Start + CheckEvery, EffectiveSteps);

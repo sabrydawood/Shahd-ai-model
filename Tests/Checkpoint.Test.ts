@@ -7,7 +7,7 @@ import { CreateOptimizer } from "../Brain/Optim/OptimBarrel.ts";
 import { CrossEntropy } from "../Brain/Ops/OpsBarrel.ts";
 import { Backward } from "../Brain/Autograd/Backward.ts";
 import { SaveCheckpoint } from "../Brain/Checkpoint/CheckpointWriter.ts";
-import { LoadCheckpoint, ApplyCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
+import { LoadCheckpoint, ApplyCheckpoint, ApplyCheckpointWeights } from "../Brain/Checkpoint/CheckpointReader.ts";
 import type { ConfigOverride } from "../Brain/Config/ConfigTypes.ts";
 
 const CkptPath = "Checkpoints/CheckpointTest.ckpt";
@@ -48,6 +48,34 @@ test("checkpoint round-trips weights, optimizer state, and RNG", () => {
   expect(Array.from(B.Opt.M[0])).toEqual(Array.from(A.Opt.M[0]));
   expect(Array.from(B.Opt.V[0])).toEqual(Array.from(A.Opt.V[0]));
   expect(B.Rng.DataRng.GetState()).toBe(A.Rng.DataRng.GetState());
+
+  rmSync(CkptPath, { force: true });
+});
+
+test("ApplyCheckpointWeights transfers weights ONLY (warm start keeps a fresh optimizer + RNG)", () => {
+  const A = Build(BaseOverride);
+  const Ids = [1, 4, 2, 5, 3];
+  const Targets = [4, 2, 5, 3, 6];
+  for (let S = 0; S < 3; S++) {
+    A.Opt.ZeroGrad();
+    Backward(CrossEntropy(A.Model.Forward(Ids), Targets));
+    A.Opt.Step(0.01);
+  }
+  SaveCheckpoint(CkptPath, A.Model, A.Opt, A.Rng, { Step: 3 });
+
+  const B = Build(BaseOverride);
+  ApplyCheckpointWeights(LoadCheckpoint(CkptPath), B.Model);
+
+  const PA = A.Model.Parameters();
+  const PB = B.Model.Parameters();
+  for (let I = 0; I < PA.length; I++) expect(Array.from(PB[I].Data)).toEqual(Array.from(PA[I].Data));
+  // The SFT stage owns its own optimizer/schedule: nothing from the pretraining run leaks in.
+  expect(B.Opt.StepCount).toBe(0);
+  expect(Array.from(B.Opt.M[0])).not.toEqual(Array.from(A.Opt.M[0]));
+
+  // Same hard shape guard as the full apply — a wrong-architecture base can never seed a run.
+  const C = Build({ Model: { EmbedDim: 16, NumLayers: 1, NumHeads: 2, BlockSize: 8, VocabSize: 10, MlpRatio: 2 } });
+  expect(() => ApplyCheckpointWeights(LoadCheckpoint(CkptPath), C.Model)).toThrow(/mismatch/);
 
   rmSync(CkptPath, { force: true });
 });

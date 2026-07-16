@@ -430,7 +430,9 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
     ...(Settings.Resume ? ["--Resume"] : []), // continue/EXTEND an existing checkpoint of this name
   ];
   const Args = Settings.Kind === "chat"
-    ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common, `--CodeSamples=${Settings.CodeSamples}`, `--ConvCount=${Settings.ConvCount}`]
+    ? ["bun", "run", "Scripts/TrainSftChat.ts", ...Common, `--CodeSamples=${Settings.CodeSamples}`, `--ConvCount=${Settings.ConvCount}`,
+       // Warm start from a pretrained base (the pretrain→SFT bridge) — only when a base was picked.
+       ...(Settings.From !== undefined && Settings.From !== "" ? [`--From=${Settings.From}`] : [])]
     : ["bun", "run", "Scripts/TrainOnFoundry.ts", ...Common, `--CorpusMb=${Settings.CorpusMb}`, `--KnowledgeMb=${Settings.KnowledgeMb}`];
   console.log(`[train] ${Settings.Kind} "${Settings.Name}": ${Settings.Steps} steps`);
   const Proc = Bun.spawn(Args, { stdout: "pipe", stderr: "pipe", env: { ...process.env } });

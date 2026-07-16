@@ -25,7 +25,7 @@ import type { CodeSample } from "../Brain/Sft/OwnedSftData.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
 import { BuildCheckpoint } from "../Brain/Checkpoint/CheckpointWriter.ts";
-import { ApplyCheckpoint } from "../Brain/Checkpoint/CheckpointReader.ts";
+import { ApplyCheckpoint, ApplyCheckpointWeights } from "../Brain/Checkpoint/CheckpointReader.ts";
 import type { Checkpoint } from "../Brain/Checkpoint/CheckpointFormat.ts";
 import { PostgresCheckpointStore } from "../Foundry/PostgresCheckpointStore.ts";
 import { ActivateFromConfig } from "../Brain/ComputeBackend/BackendSelector.ts";
@@ -46,6 +46,7 @@ const Workers = Number(ReadArg("--Workers=", "0")); // sequence-parallel worker 
 const Lr = Number(ReadArg("--Lr=", "0.002"));
 const ResumeFlag = ReadFlag("--Resume"); // explicit "train it more" — extend an existing chat model
 const Fresh = ReadFlag("--Fresh"); // explicit overwrite of a same-name model (bypasses the guard below)
+const From = ReadArg("--From=", ""); // warm-start a NEW chat run from a pretrained BASE checkpoint's weights
 
 // 1) SFT data from the SEPARATED kind tables, each capped independently: code (for the owned
 // language-ID task) from documents_code, real dialogue from documents_conversation. Knowledge
@@ -116,13 +117,58 @@ if (CkptStore !== null && !Fresh) {
   }
 }
 
+// WARM START (--From): begin a NEW chat run from a pretrained BASE checkpoint's weights — the
+// pretrain→SFT bridge that gives the chat model a language foundation instead of random init.
+// The base's tokenizer (merges + specials, which now reserve the chat/tool control tokens) is reused
+// VERBATIM so every token id lands on the embedding row the base trained; only the weights transfer —
+// optimizer/schedule/RNG are fresh (ApplyCheckpointWeights). Resume takes precedence: a resumed run
+// continues from its OWN weights and --From is ignored with a warning.
+type WarmStart = { Ckpt: Checkpoint; State: ChatTokenizerState };
+let Warm: WarmStart | null = null;
+if (From !== "") {
+  if (Resume !== null) {
+    console.warn(`--From=${From} ignored: resuming "${Name}" continues from its own weights`);
+  } else if (CkptStore === null) {
+    console.error(`--From requires DATABASE_URL (the base checkpoint lives in Postgres)`);
+    process.exit(1);
+  } else {
+    const BaseCkpt = await CkptStore.Load(From);
+    if (BaseCkpt === null) {
+      console.error(`--From: base model "${From}" not found`);
+      process.exit(1);
+    }
+    const State = (BaseCkpt.TokenizerState ?? null) as ChatTokenizerState | null;
+    if (State === null || State.Kind !== "Bpe" || !Array.isArray(State.Merges) || !Array.isArray(State.Specials)) {
+      console.error(`--From: base model "${From}" has no reusable BPE tokenizer state`);
+      process.exit(1);
+    }
+    const Missing = [...ChatTokenList, ...ToolTokenList].filter((T) => !State.Specials.includes(T));
+    if (Missing.length > 0) {
+      console.error(`--From: base "${From}" vocab lacks the chat/tool specials (${Missing.join(", ")}) — retrain the base (TrainOnFoundry now reserves them)`);
+      process.exit(1);
+    }
+    const M = BaseCkpt.Config.Model;
+    if (M.EmbedDim !== EmbedDim || M.NumLayers !== NumLayers || M.NumHeads !== NumHeads || M.BlockSize !== BlockSize) {
+      console.error(`--From: base "${From}" is emb${M.EmbedDim} L${M.NumLayers} h${M.NumHeads} ctx${M.BlockSize} but this run requested emb${EmbedDim} L${NumLayers} h${NumHeads} ctx${BlockSize} — architectures must match exactly`);
+      process.exit(1);
+    }
+    Warm = { Ckpt: BaseCkpt, State };
+  }
+}
+
 // 2) SpecialTokenizer = byte-level BPE + chat/tool special tokens. Reuse the checkpoint's exact merges
-// + specials when resuming (so token ids align with the trained embeddings); else train fresh.
-const Specials = ResumeState !== null ? ResumeState.Specials : [...ChatTokenList, ...ToolTokenList];
+// + specials when resuming or warm-starting (so token ids align with the trained embeddings); else
+// train fresh BPE on the SFT corpus.
+const Inherit = ResumeState ?? Warm?.State ?? null;
+const Specials = Inherit !== null ? Inherit.Specials : [...ChatTokenList, ...ToolTokenList];
 const CorpusText = Conversations.flatMap((C) => C.map((M) => M.Content)).join("\n");
-const Bpe = ResumeState !== null ? { Merges: ResumeState.Merges } : TrainBpe(CorpusText, NumMerges);
+const Bpe = Inherit !== null ? { Merges: Inherit.Merges } : TrainBpe(CorpusText, NumMerges);
 const Tokenizer = new SpecialTokenizer(new BytePairEncoder(Bpe), Specials);
-console.log(`tokenizer: ${Bpe.Merges.length} merges + ${Specials.length} specials -> vocab ${Tokenizer.VocabSize}${Resume !== null ? " (reused from checkpoint)" : ""}`);
+if (Warm !== null && Warm.Ckpt.Config.Model.VocabSize !== Tokenizer.VocabSize) {
+  console.error(`--From: base "${From}" VocabSize ${Warm.Ckpt.Config.Model.VocabSize} != rebuilt tokenizer vocab ${Tokenizer.VocabSize} (corrupt/inconsistent tokenizer state)`);
+  process.exit(1);
+}
+console.log(`tokenizer: ${Bpe.Merges.length} merges + ${Specials.length} specials -> vocab ${Tokenizer.VocabSize}${Resume !== null ? " (reused from checkpoint)" : Warm !== null ? ` (reused from base "${From}")` : ""}`);
 
 // 3) Pre-render every conversation with the loss mask; keep only those that fit the context AND have
 // at least one trainable (assistant) token. Report how many were dropped (no silent truncation).
@@ -143,7 +189,10 @@ const Warmup = Math.max(1, Math.min(40, Math.floor(Steps / 5)));
 const Inherited = Resume !== null ? Resume.Ckpt.Config : null;
 const Config = LoadConfig({
   Overrides: {
-    Model: Inherited !== null ? { ...Inherited.Model } : { VocabSize: Tokenizer.VocabSize, EmbedDim, NumLayers, NumHeads, BlockSize, PositionScheme: "Rope", NormKind: "RmsNorm", MlpKind: "SwiGlu" },
+    // Warm start adopts the BASE's full Model block (not just the CLI dims): the weights were trained
+    // under its non-shape fields too (MlpKind/NormKind/PositionScheme/ratios), and rebuilding them
+    // from CLI defaults would silently reinterpret the loaded tensors.
+    Model: Inherited !== null ? { ...Inherited.Model } : Warm !== null ? { ...Warm.Ckpt.Config.Model } : { VocabSize: Tokenizer.VocabSize, EmbedDim, NumLayers, NumHeads, BlockSize, PositionScheme: "Rope", NormKind: "RmsNorm", MlpKind: "SwiGlu" },
     Training: { BatchSize: Inherited !== null ? Inherited.Training.BatchSize : BatchSize, Workers },
     Schedule: Inherited !== null ? { ...Inherited.Schedule, MaxSteps: Steps } : { Kind: "Cosine", WarmupSteps: Warmup, MaxSteps: Steps, MinLrRatio: 0.1 },
     Optimizer: Inherited !== null ? { ...Inherited.Optimizer } : { Kind: "AdamW", LearningRate: Lr },
@@ -159,13 +208,16 @@ let StartStep = 0;
 if (Resume !== null) {
   ApplyCheckpoint(Resume.Ckpt, Model, Optimizer, Rng); // restore weights + optimizer + RNG state
   StartStep = Resume.Step;
+} else if (Warm !== null) {
+  ApplyCheckpointWeights(Warm.Ckpt, Model); // weights only — fresh AdamW/schedule/RNG for the SFT stage
+  console.log(`warm start: applied base "${From}" weights (pretrained to step ${Number((Warm.Ckpt.Meta as Record<string, unknown>)["Step"] ?? 0)})`);
 }
 // Sequence-parallel pool (after ApplyCheckpoint so the shared weights start from the restored
 // values). Batch size comes from the RESOLVED config — on resume it is the checkpoint's, not the CLI's.
 const EffBatch = Config.Training.BatchSize;
 const Pool = Config.Training.Workers > 0 ? await CreateTrainWorkerPool(Model, Config, "sft") : null;
 const Params = Model.Parameters().reduce((A, P) => A + P.Size, 0);
-console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}${Pool !== null ? `; ${Pool.WorkerCount} workers` : ""}; ${Resume !== null ? `resuming from step ${StartStep}` : "fresh"} -> ${Steps} SFT steps`);
+console.log(`model: ${Params.toLocaleString()} params (emb=${EmbedDim} L=${NumLayers} ctx=${BlockSize}); backend ${ComputeChoice.Chosen}${Pool !== null ? `; ${Pool.WorkerCount} workers` : ""}; ${Resume !== null ? `resuming from step ${StartStep}` : Warm !== null ? `warm from base "${From}"` : "fresh"} -> ${Steps} SFT steps`);
 
 // 5) SFT loop: masked forward/backward over a batch, divide accumulated grad by batch, clip, step.
 // (CkptStore was opened above for resume detection; reused here for periodic + final saves.)
@@ -173,7 +225,8 @@ const GlobalStart = Date.now();
 // Every step is logged with its own duration (StepMs) — same contract as TrainOnFoundry.
 let LastElapsedMs = 0;
 function BuildAt(Step: number): Checkpoint {
-  return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: Steps, Step, Corpus: "sft-owned", Format: "chat" }, { Kind: "Bpe", Merges: Bpe.Merges, Specials });
+  // Provenance: a warm-started model records which base its weights came from.
+  return BuildCheckpoint(Model, Optimizer, Rng, { FinalStep: Steps, Step, Corpus: "sft-owned", Format: "chat", ...(Warm !== null ? { From } : {}) }, { Kind: "Bpe", Merges: Bpe.Merges, Specials });
 }
 const CheckEvery = Math.max(50, Math.floor(Steps / 20));
 for (let Step = StartStep; Step < Steps; Step++) {

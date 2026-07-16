@@ -32,7 +32,9 @@ export function LoadCheckpoint(Path: string): Checkpoint {
   return ParseCheckpoint(readFileSync(Path, "utf8"));
 }
 
-export function ApplyCheckpoint(Ckpt: Checkpoint, Model: Shahd, Optimizer: Optimizer, Rng: RngStreams): void {
+// Shape checks + weight copy, shared by the full resume (ApplyCheckpoint) and the weights-only
+// warm start (ApplyCheckpointWeights) so the two paths can never drift.
+function ApplyParams(Ckpt: Checkpoint, Model: Shahd): void {
   const Diffs: string[] = [];
   for (const Field of ShapeFields) {
     const Want = Ckpt.Config.Model[Field];
@@ -41,14 +43,6 @@ export function ApplyCheckpoint(Ckpt: Checkpoint, Model: Shahd, Optimizer: Optim
   }
   if (Diffs.length > 0) {
     throw new Error(`ApplyCheckpoint: architecture mismatch — cannot load weights:\n  ${Diffs.join("\n  ")}`);
-  }
-
-  // Non-shape config drift (e.g. Optimizer Beta/WeightDecay, NormKind, MlpRatio) passes the shape check
-  // but silently reinterprets the saved optimizer moments / architecture under different hyperparameters.
-  // We don't hard-fail (resuming with a changed MaxSteps/LR is legitimate) but we WARN loudly so a
-  // genuinely-wrong resume is visible rather than silent.
-  if (Ckpt.ConfigHash !== Model.Config.ConfigHash) {
-    console.warn(`ApplyCheckpoint: config hash differs (checkpoint=${Ckpt.ConfigHash.slice(0, 12)}… model=${Model.Config.ConfigHash.slice(0, 12)}…) — architecture shapes match but some non-shape config (optimizer/norm/etc.) changed; the saved optimizer moments are being reused under the new config.`);
   }
 
   const Params = Model.Parameters();
@@ -67,6 +61,27 @@ export function ApplyCheckpoint(Ckpt: Checkpoint, Model: Shahd, Optimizer: Optim
     }
     P.Data.set(Decoded);
   }
+}
+
+/** Apply ONLY the model weights from a checkpoint — the pretrain→SFT warm start: SFT continues from
+ *  the base model's weights under a FRESH optimizer/schedule/RNG, so the saved AdamW moments and RNG
+ *  streams (which belong to the pretraining run) are deliberately NOT restored. Same hard shape
+ *  checks as ApplyCheckpoint (never silently reshapes). No config-hash warning here: the configs
+ *  legitimately differ (new schedule/optimizer) and nothing stale is being reused. */
+export function ApplyCheckpointWeights(Ckpt: Checkpoint, Model: Shahd): void {
+  ApplyParams(Ckpt, Model);
+}
+
+export function ApplyCheckpoint(Ckpt: Checkpoint, Model: Shahd, Optimizer: Optimizer, Rng: RngStreams): void {
+  // Non-shape config drift (e.g. Optimizer Beta/WeightDecay, NormKind, MlpRatio) passes the shape check
+  // but silently reinterprets the saved optimizer moments / architecture under different hyperparameters.
+  // We don't hard-fail (resuming with a changed MaxSteps/LR is legitimate) but we WARN loudly so a
+  // genuinely-wrong resume is visible rather than silent.
+  if (Ckpt.ConfigHash !== Model.Config.ConfigHash) {
+    console.warn(`ApplyCheckpoint: config hash differs (checkpoint=${Ckpt.ConfigHash.slice(0, 12)}… model=${Model.Config.ConfigHash.slice(0, 12)}…) — architecture shapes match but some non-shape config (optimizer/norm/etc.) changed; the saved optimizer moments are being reused under the new config.`);
+  }
+
+  ApplyParams(Ckpt, Model);
 
   const MDump = Ckpt.Optimizer.M.map(DecodeFloat64);
   const VDump = Ckpt.Optimizer.V.map(DecodeFloat64);

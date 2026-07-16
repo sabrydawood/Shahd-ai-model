@@ -50,8 +50,11 @@ export type TrainSettings = {
   BlockSize: number;
   Merges: number; // vocab = 256 + Merges
   BatchSize: number;
-  // Sequence-parallel worker threads for PRETRAIN (Config.Training.Workers; 0/absent = sequential).
-  // Chat/SFT ignores it — variable-length batches are rejected by the pool by design.
+  // Warm start (chat only): name of a pretrained BASE checkpoint whose weights seed the SFT run
+  // (TrainSftChat --From). Absent/empty = SFT from random init (the old behavior).
+  From?: string;
+  // Sequence-parallel worker threads (Config.Training.Workers; 0/absent = sequential) — used by BOTH
+  // pretrain and chat/SFT since the pool learned variable-length sequences (T5a).
   Workers?: number;
   // Per-kind data amounts (the mix): pretrain reads CorpusMb of code + KnowledgeMb of knowledge; chat
   // SFT reads CodeSamples code docs + ConvCount real dialogues. Set any to 0 for a pure-kind model.
