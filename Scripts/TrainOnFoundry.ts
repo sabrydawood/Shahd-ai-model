@@ -115,6 +115,18 @@ if (CkptStore !== null && !Measure && !Fresh) {
     const DoneStep = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
     if (Match && DoneStep < EffectiveSteps) Resume = { Ckpt: Existing, Step: DoneStep, Merges: State.Merges };
   }
+  // OVERWRITE GUARD: a same-name checkpoint that is NOT being resumed would be silently replaced by
+  // this run's periodic saves — a finished model died that way once. Fail fast instead; overwriting
+  // must be said out loud (--Fresh), never implied by reusing a name.
+  if (Existing !== null && Resume === null) {
+    const At = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
+    console.error(
+      ResumeFlag
+        ? `cannot resume "${CkptName}": the saved model (step ${At}) has a different architecture/tokenizer or is already at/past the requested ${EffectiveSteps} steps — pick a new name or raise Steps`
+        : `model "${CkptName}" already exists (step ${At}) — pick a NEW name, enable Resume to extend it, or pass --Fresh to overwrite it intentionally`,
+    );
+    process.exit(1);
+  }
 }
 
 // Tokenizer: reuse the checkpoint's merges when resuming, else train fresh BPE on the corpus. Wrapped

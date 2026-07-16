@@ -43,6 +43,7 @@ const BlockSize = Number(ReadArg("--Block=", "256"));
 const BatchSize = Number(ReadArg("--Batch=", "8"));
 const Lr = Number(ReadArg("--Lr=", "0.002"));
 const ResumeFlag = ReadFlag("--Resume"); // explicit "train it more" — extend an existing chat model
+const Fresh = ReadFlag("--Fresh"); // explicit overwrite of a same-name model (bypasses the guard below)
 
 // 1) SFT data from the SEPARATED kind tables, each capped independently: code (for the owned
 // language-ID task) from documents_code, real dialogue from documents_conversation. Knowledge
@@ -78,7 +79,7 @@ const CkptStore = DbUrl !== undefined && DbUrl !== "" ? new PostgresCheckpointSt
 type ChatTokenizerState = { Kind: string; Merges: [number, number][]; Specials: string[] };
 let Resume: { Ckpt: Checkpoint; Step: number } | null = null;
 let ResumeState: ChatTokenizerState | null = null;
-if (CkptStore !== null) {
+if (CkptStore !== null && !Fresh) {
   const Existing = await CkptStore.Load(Name);
   const State = (Existing?.TokenizerState ?? null) as ChatTokenizerState | null;
   if (Existing !== null && State !== null && State.Kind === "Bpe" && Array.isArray(State.Merges) && Array.isArray(State.Specials)) {
@@ -90,6 +91,17 @@ if (CkptStore !== null) {
       Resume = { Ckpt: Existing, Step: DoneStep };
       ResumeState = State;
     }
+  }
+  // OVERWRITE GUARD — same contract as TrainOnFoundry: reusing a name never silently replaces a
+  // saved model; overwriting must be explicit (--Fresh).
+  if (Existing !== null && Resume === null) {
+    const At = Number((Existing.Meta as Record<string, unknown>)["Step"] ?? 0);
+    console.error(
+      ResumeFlag
+        ? `cannot resume "${Name}": the saved chat model (step ${At}) has a different architecture/tokenizer or is already at/past the requested ${Steps} steps — pick a new name or raise Steps`
+        : `model "${Name}" already exists (step ${At}) — pick a NEW name, enable Resume to extend it, or pass --Fresh to overwrite it intentionally`,
+    );
+    process.exit(1);
   }
 }
 
