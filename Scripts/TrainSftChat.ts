@@ -20,7 +20,7 @@ import { SftForwardBackward } from "../Brain/Sft/SftStep.ts";
 import { RenderForTraining, ChatTokenList, RenderChat } from "../Brain/Sft/ChatTemplate.ts";
 import type { TrainingSequence } from "../Brain/Sft/ChatTemplate.ts";
 import { ToolTokenList } from "../Brain/Serving/ToolProtocol.ts";
-import { BuildOwnedConversations } from "../Brain/Sft/OwnedSftData.ts";
+import { BuildOwnedConversations, OwnedSystemPrompt } from "../Brain/Sft/OwnedSftData.ts";
 import type { CodeSample } from "../Brain/Sft/OwnedSftData.ts";
 import { Generate } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
@@ -67,12 +67,15 @@ const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { Arithmetic
 
 // Parse each collected conversation doc ("User: …\n\nAssistant: …") into an SFT example so the chat
 // model learns from real dialogue — the link that makes "collect conversation data -> the model talks".
-const ConvSystem = "You are Shahd, a helpful assistant.";
+// Same UNIFIED system prompt as the owned mix: a third near-identical wording ("helpful assistant")
+// would split a tiny model's behavior across prompts — the exact failure class of the typescript
+// incident. Real dialogue carries NO synthetic <|think|> span (we don't fabricate reasoning for text
+// we didn't author); the owned mix supplies the thinking distribution.
 let AddedGeneral = 0;
 for (const Doc of ConvDocs) {
   const Match = /^User: ([\s\S]*?)\n\nAssistant: ([\s\S]*)$/.exec(Doc.Content);
   if (Match === null) continue;
-  Conversations.push([{ Role: "System", Content: ConvSystem }, { Role: "User", Content: Match[1]! }, { Role: "Assistant", Content: Match[2]! }]);
+  Conversations.push([{ Role: "System", Content: OwnedSystemPrompt }, { Role: "User", Content: Match[1]! }, { Role: "Assistant", Content: Match[2]! }]);
   AddedGeneral++;
 }
 await Stores.Close();
@@ -214,7 +217,9 @@ if (CkptStore !== null) {
 
 // 6) Probe: does it produce the format? (garbled at this scale — the point is the mechanism works.)
 for (const Probe of ["hi", "What is 7 + 5?"]) {
-  const Prompt = RenderChat([{ Role: "System", Content: "You are Shahd." }, { Role: "User", Content: Probe }], true);
+  // The probe MUST use the exact training system prompt — a tiny model keys behavior on the prompt
+  // prefix, and probing with a different wording measures nothing (train/serve prompt parity).
+  const Prompt = RenderChat([{ Role: "System", Content: OwnedSystemPrompt }, { Role: "User", Content: Probe }], true);
   const Out = Generate(Model, Tokenizer.Encode(Prompt), 40, { ...DefaultSampling, Temperature: 0.7 }, Rng.SamplingRng);
   const Text = Tokenizer.Decode(Out.slice(Tokenizer.Encode(Prompt).length));
   console.log(`[probe] "${Probe}" -> ${JSON.stringify(StripThinking(Text).slice(0, 100))}`);

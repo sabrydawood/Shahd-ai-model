@@ -10,11 +10,12 @@ import { StripThinking, WrapThinking } from "./ThinkingMode.ts";
 
 export const AnswerTags = { Open: "<answer>", Close: "</answer>" } as const;
 
-// The ONE canonical system prompt that ties training to serving: SFT data is generated with it and the
-// serving agent renders with it, so the model is asked to do at inference exactly what it was taught —
-// think inside <|think|>…<|endthink|>, then give the final answer inside <answer>…</answer> (which
-// ExtractAnswer parses). Keeping this in one place is what makes A2 (prompt) / A3 (extract) / A4 (vote)
-// consistent instead of silently drifting apart.
+// The canonical prompt for EXPLICIT reasoning-eval prompting (A2 prompt / A3 extract / A4 vote).
+// NOTE (unified recipe): chat SFT no longer trains thinking under this prompt — the owned mix
+// teaches the think scaffold under OwnedSystemPrompt with the behavior carried by the DATA (every
+// owned assistant turn starts with <|think|>), because serving only ever presents OwnedSystemPrompt
+// and a tiny model keys behavior on the exact prompt prefix. This prompt remains for reasoning-eval
+// paths that want the <answer>…</answer> span contract stated explicitly.
 export const DefaultThinkingSystemPrompt =
   "You are Shahd, a helpful coding assistant. Think step by step inside <|think|>…<|endthink|>, then give your final answer inside <answer>…</answer>.";
 

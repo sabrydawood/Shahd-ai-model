@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { BuildOwnedConversations } from "../Brain/Sft/OwnedSftData.ts";
+import { BuildOwnedConversations, OwnedSystemPrompt } from "../Brain/Sft/OwnedSftData.ts";
 import type { CodeSample } from "../Brain/Sft/OwnedSftData.ts";
 import { SeededRng } from "../Brain/Random/SeededRng.ts";
 import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
@@ -25,10 +25,32 @@ test("BuildOwnedConversations: persona + arithmetic-as-tool + thinking + grounde
   // The thinking scaffold appears.
   const Thinking = Convos.filter((C) => C.some((M) => M.Content.includes(ChatTokens.Think)));
   expect(Thinking.length).toBeGreaterThanOrEqual(5);
-  // Grounded language-ID uses ONLY the real, known-language, long-enough sample.
+  // Grounded language-ID uses ONLY the real, known-language, long-enough sample — the reply is the
+  // language name after the think scratchpad.
   const Lang = Convos.filter((C) => C.some((M) => M.Content.startsWith("What programming language")));
   expect(Lang.length).toBe(1);
-  expect(Lang[0]!.find((M) => M.Role === "Assistant")!.Content).toBe("typescript");
+  const LangReply = Lang[0]!.find((M) => M.Role === "Assistant")!.Content;
+  expect(LangReply.endsWith(`${ChatTokens.EndThink}typescript`)).toBe(true);
+});
+
+test("unified recipe: ONE system prompt everywhere + every owned assistant turn thinks first", () => {
+  const Convos = BuildOwnedConversations(Samples, new SeededRng(7), { ArithmeticCount: 6, ThinkingCount: 4, PersonaRepeats: 1, MaxCodeConversations: 5 });
+  for (const C of Convos) {
+    // The single training prompt is exactly what serving presents (train/serve prompt parity).
+    expect(C[0]!.Content).toBe(OwnedSystemPrompt);
+    // The thinking behavior lives in the data: every assistant turn opens with the scratchpad.
+    for (const M of C) if (M.Role === "Assistant") expect(M.Content.startsWith(ChatTokens.Think)).toBe(true);
+  }
+});
+
+test("identity coverage: 'who are you?' variants answer with the canonical identity, not a task pattern", () => {
+  const Convos = BuildOwnedConversations([], new SeededRng(7), { ArithmeticCount: 0, ThinkingCount: 0, PersonaRepeats: 1, MaxCodeConversations: 0 });
+  const Identity = ["who are you?", "who are you", "Who are you?", "what is your name?", "what are you?"];
+  for (const Q of Identity) {
+    const Hit = Convos.find((C) => C.some((M) => M.Role === "User" && M.Content === Q));
+    expect(Hit).toBeDefined();
+    expect(Hit!.find((M) => M.Role === "Assistant")!.Content).toContain("Shahd");
+  }
 });
 
 test("BuildOwnedConversations is deterministic for a given seed + samples", () => {
