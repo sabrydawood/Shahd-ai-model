@@ -45,6 +45,10 @@ import (
 // matmul_avx.c — it is what makes the range split worth aligning.
 const RowBlock = 8
 
+// DB columns the TN kernel processes simultaneously (must match PBlock in matmul_avx.c). TN range
+// splits snap to this so goroutine boundaries do not push columns into the slower remainder loop.
+const TnColBlock = 8
+
 // Transpose elements per goroutine (~32 KB of float64, about an L1 working set). Sets how wide the
 // B-transpose fans out; see the worker-count comment in MatMulF64 for why it is size-driven.
 const TransposeChunk = 4096
@@ -231,6 +235,7 @@ func MatMulTNF64(a *C.double, dout *C.double, db *C.double, m C.int, k C.int, n 
 		return
 	}
 	PPer := (K + Workers - 1) / Workers
+	PPer = ((PPer + TnColBlock - 1) / TnColBlock) * TnColBlock
 
 	var Wg sync.WaitGroup
 	for P0 := 0; P0 < K; P0 += PPer {

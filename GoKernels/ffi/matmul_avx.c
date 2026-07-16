@@ -133,11 +133,95 @@ void MatMulRowsAvx(const double *A, const double *BT, double *O,
 // horizontal sums at all. Per (p,j) the sum runs over i ASCENDING — the same order as the scalar
 // TS backward — so the only numeric drift vs TS is FMA's single rounding.
 //
-// The Av == 0 skip mirrors the TS path: activation gradients regularly contain hard zeros
-// (masked positions), and skipping a full row of FMAs is worth one compare.
+// BLOCKED over PBlock=8 columns of A: one DOut[i,:] load feeds 8 DB rows, cutting DOut re-reads
+// 8x. Profiled BEFORE this blocking, the p-at-a-time form re-streamed the whole DOut matrix once
+// per p (~1GB per Nano sequence) and was 57% of all matmul time under the single-threaded worker
+// regime. The 8 DB rows (<=32KB at this model's N) stay cache-hot across the i loop. Per (p,j)
+// the sum still runs over i ASCENDING, so the blocked form is BIT-IDENTICAL to the row-at-a-time
+// form for finite inputs (0.0 * x contributes exactly nothing) — only the remainder path keeps
+// the Av==0 skip, where it is still worth one compare.
 void MatMulTnAvx(const double *A, const double *DOut, double *DB,
                  int PStart, int PEnd, int M, int K, int N, int Acc) {
-    for (int P = PStart; P < PEnd; P++) {
+    // Block width adapts to N: the blocked pass read-modify-writes PBlock DB rows per i, and that
+    // working set must SHARE L1 with the streaming DOut row. 8 rows x N=512 doubles = 32KB filled
+    // L1 exactly and measured SLOWER than no blocking at all; 4 rows (16KB) leave room. Narrow
+    // shapes (N <= 256, the attention projections/scores) keep the full 8-wide reuse.
+    int P = PStart;
+
+    if (N > 256) {
+        for (; P + 4 <= PEnd; P += 4) {
+            double *Db0 = DB + (size_t)(P + 0) * N;
+            double *Db1 = DB + (size_t)(P + 1) * N;
+            double *Db2 = DB + (size_t)(P + 2) * N;
+            double *Db3 = DB + (size_t)(P + 3) * N;
+            if (!Acc) {
+                for (int J = 0; J < N; J++) { Db0[J] = 0.0; Db1[J] = 0.0; Db2[J] = 0.0; Db3[J] = 0.0; }
+            }
+            for (int I = 0; I < M; I++) {
+                const double *Ar = A + (size_t)I * K + P;
+                const double *Dr = DOut + (size_t)I * N;
+                __m256d V0 = _mm256_set1_pd(Ar[0]), V1 = _mm256_set1_pd(Ar[1]);
+                __m256d V2 = _mm256_set1_pd(Ar[2]), V3 = _mm256_set1_pd(Ar[3]);
+                int J = 0;
+                for (; J + 4 <= N; J += 4) {
+                    __m256d Dv = _mm256_loadu_pd(Dr + J); // loaded once, reused by 4 DB rows
+                    _mm256_storeu_pd(Db0 + J, _mm256_fmadd_pd(V0, Dv, _mm256_loadu_pd(Db0 + J)));
+                    _mm256_storeu_pd(Db1 + J, _mm256_fmadd_pd(V1, Dv, _mm256_loadu_pd(Db1 + J)));
+                    _mm256_storeu_pd(Db2 + J, _mm256_fmadd_pd(V2, Dv, _mm256_loadu_pd(Db2 + J)));
+                    _mm256_storeu_pd(Db3 + J, _mm256_fmadd_pd(V3, Dv, _mm256_loadu_pd(Db3 + J)));
+                }
+                for (; J < N; J++) { // N % 4 tail
+                    double Dj = Dr[J];
+                    Db0[J] += Ar[0] * Dj; Db1[J] += Ar[1] * Dj; Db2[J] += Ar[2] * Dj; Db3[J] += Ar[3] * Dj;
+                }
+            }
+        }
+    }
+
+    for (; P + 8 <= PEnd; P += 8) {
+        double *Db0 = DB + (size_t)(P + 0) * N;
+        double *Db1 = DB + (size_t)(P + 1) * N;
+        double *Db2 = DB + (size_t)(P + 2) * N;
+        double *Db3 = DB + (size_t)(P + 3) * N;
+        double *Db4 = DB + (size_t)(P + 4) * N;
+        double *Db5 = DB + (size_t)(P + 5) * N;
+        double *Db6 = DB + (size_t)(P + 6) * N;
+        double *Db7 = DB + (size_t)(P + 7) * N;
+        if (!Acc) {
+            for (int J = 0; J < N; J++) {
+                Db0[J] = 0.0; Db1[J] = 0.0; Db2[J] = 0.0; Db3[J] = 0.0;
+                Db4[J] = 0.0; Db5[J] = 0.0; Db6[J] = 0.0; Db7[J] = 0.0;
+            }
+        }
+        for (int I = 0; I < M; I++) {
+            const double *Ar = A + (size_t)I * K + P;
+            const double *Dr = DOut + (size_t)I * N;
+            __m256d V0 = _mm256_set1_pd(Ar[0]), V1 = _mm256_set1_pd(Ar[1]);
+            __m256d V2 = _mm256_set1_pd(Ar[2]), V3 = _mm256_set1_pd(Ar[3]);
+            __m256d V4 = _mm256_set1_pd(Ar[4]), V5 = _mm256_set1_pd(Ar[5]);
+            __m256d V6 = _mm256_set1_pd(Ar[6]), V7 = _mm256_set1_pd(Ar[7]);
+            int J = 0;
+            for (; J + 4 <= N; J += 4) {
+                __m256d Dv = _mm256_loadu_pd(Dr + J); // loaded once, reused by all 8 DB rows
+                _mm256_storeu_pd(Db0 + J, _mm256_fmadd_pd(V0, Dv, _mm256_loadu_pd(Db0 + J)));
+                _mm256_storeu_pd(Db1 + J, _mm256_fmadd_pd(V1, Dv, _mm256_loadu_pd(Db1 + J)));
+                _mm256_storeu_pd(Db2 + J, _mm256_fmadd_pd(V2, Dv, _mm256_loadu_pd(Db2 + J)));
+                _mm256_storeu_pd(Db3 + J, _mm256_fmadd_pd(V3, Dv, _mm256_loadu_pd(Db3 + J)));
+                _mm256_storeu_pd(Db4 + J, _mm256_fmadd_pd(V4, Dv, _mm256_loadu_pd(Db4 + J)));
+                _mm256_storeu_pd(Db5 + J, _mm256_fmadd_pd(V5, Dv, _mm256_loadu_pd(Db5 + J)));
+                _mm256_storeu_pd(Db6 + J, _mm256_fmadd_pd(V6, Dv, _mm256_loadu_pd(Db6 + J)));
+                _mm256_storeu_pd(Db7 + J, _mm256_fmadd_pd(V7, Dv, _mm256_loadu_pd(Db7 + J)));
+            }
+            for (; J < N; J++) { // N % 4 tail
+                double Dj = Dr[J];
+                Db0[J] += Ar[0] * Dj; Db1[J] += Ar[1] * Dj; Db2[J] += Ar[2] * Dj; Db3[J] += Ar[3] * Dj;
+                Db4[J] += Ar[4] * Dj; Db5[J] += Ar[5] * Dj; Db6[J] += Ar[6] * Dj; Db7[J] += Ar[7] * Dj;
+            }
+        }
+    }
+
+    // Columns left over when the range is not a multiple of PBlock: the original one-at-a-time form.
+    for (; P < PEnd; P++) {
         double *Db = DB + (size_t)P * N;
         if (!Acc) {
             for (int J = 0; J < N; J++) Db[J] = 0.0;
