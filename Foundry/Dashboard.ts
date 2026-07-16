@@ -78,6 +78,10 @@ function ParseTrainSettings(Body: Record<string, unknown>): TrainSettings {
     BlockSize: ToNum(Body["BlockSize"], 96),
     Merges: ToNum(Body["Merges"], 256),
     BatchSize: ToNum(Body["BatchSize"], 16),
+    // The one field the sanitizer previously DROPPED — the client sent Workers, this whitelist ate
+    // it, and TrainFn's ?? fallback quietly ran a 4-hour sequential pretrain. Default 8: dashboard
+    // training should be fast even for an older cached client that doesn't send the field.
+    Workers: ToNum(Body["Workers"], 8),
     KnowledgeMb: ToNum(Body["KnowledgeMb"], 0),
     ConvCount: ToNum(Body["ConvCount"], 4000),
     CodeSamples: ToNum(Body["CodeSamples"], 4000),

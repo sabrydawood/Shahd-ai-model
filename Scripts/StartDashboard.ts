@@ -355,7 +355,7 @@ const Learn: LearnFn = async (Settings, OnEvent, Signal) => {
 const ParseTrainLine = (Line: string, Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void): void => {
   if (Line.startsWith("{")) {
     try {
-      const J = JSON.parse(Line) as { Step?: number; TrainLoss?: number; ValLoss?: number; ElapsedMs?: number };
+      const J = JSON.parse(Line) as { Step?: number; TrainLoss?: number; ValLoss?: number; ElapsedMs?: number; StepMs?: number };
       if (typeof J.Step === "number") {
         OnEvent({
           kind: "train-progress",
@@ -364,6 +364,7 @@ const ParseTrainLine = (Line: string, Settings: TrainSettings, OnEvent: (Event: 
           trainLoss: J.TrainLoss ?? 0,
           valLoss: typeof J.ValLoss === "number" ? J.ValLoss : undefined,
           elapsedMs: typeof J.ElapsedMs === "number" ? J.ElapsedMs : undefined,
+          stepMs: typeof J.StepMs === "number" ? J.StepMs : undefined,
         });
         return;
       }

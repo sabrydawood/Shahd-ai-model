@@ -132,7 +132,7 @@ export const DashboardHtml = `<!doctype html><html lang="en"><head><meta charset
      </div>
      <div class="card">
       <h3>Live run <span class="r pill idle" id="t-badge">idle</span></h3>
-      <svg class="spark" id="t-spark" viewBox="0 0 300 74" preserveAspectRatio="none"></svg>
+      <div class="sparkwrap"><svg class="spark" id="t-spark" viewBox="0 0 300 74" preserveAspectRatio="none"></svg><div class="sparktip" id="t-tip"></div></div>
       <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--mut);margin:8px 0"><span>loss <b class="mono" id="t-loss" style="color:var(--text)">—</b></span><span>elapsed <b class="mono" id="t-elapsed" style="color:var(--text)">—</b></span><span id="t-eta"></span></div>
       <div class="log" id="t-log"><div>configure the model, then Train. Re-running a name (or picking it in Resume) continues it.</div></div>
      </div>

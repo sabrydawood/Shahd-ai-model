@@ -118,6 +118,8 @@ export const DashboardStyles = `
  .row{display:grid;gap:11px} .row.c3{grid-template-columns:repeat(3,1fr)} .row.c2{grid-template-columns:repeat(2,1fr)} .row.c4{grid-template-columns:repeat(4,1fr)}
  @media(max-width:640px){.row.c3,.row.c4{grid-template-columns:repeat(2,1fr)}}
  .chk{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--mut)} .chk input{width:auto}
+ .sparkwrap{position:relative}
+ .sparktip{position:absolute;top:4px;left:0;display:none;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:var(--radius-sm);padding:3px 9px;font-size:11.5px;white-space:nowrap;pointer-events:none;z-index:5}
 
  .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:3px;gap:3px}
  .seg button{font:inherit;font-weight:600;font-size:13px;border:0;background:transparent;color:var(--mut);padding:6px 15px;border-radius:6px;cursor:pointer}
