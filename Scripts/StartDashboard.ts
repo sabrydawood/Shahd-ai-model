@@ -481,12 +481,9 @@ const Train: TrainFn = async (Settings, OnEvent, Signal) => {
   if (KillTimer !== null) clearTimeout(KillTimer);
   rmSync(StopFile, { force: true });
   if (Signal?.aborted === true) {
-    OnEvent({
-      kind: "train-error",
-      message: Code === 0
-        ? "paused — checkpoint saved at the exact step you stopped at; press Train (Resume) to continue from there"
-        : "stopped — last periodic checkpoint is kept; press Train (Resume) to continue",
-    });
+    OnEvent(Code === 0
+      ? { kind: "train-error", paused: true, message: "paused — checkpoint saved at the exact step you stopped at (and loaded into Chat); press Train (Resume) to continue from there" }
+      : { kind: "train-error", message: "stopped — last periodic checkpoint is kept; press Train (Resume) to continue" });
   } else if (Code === 0) OnEvent({ kind: "train-done", savedTo: `postgres:${Settings.Name}` }); // the TRAINED model's name (CkptName is the startup-loaded one)
   else OnEvent({ kind: "train-error", message: `trainer exited with code ${Code} (see server console)` });
 };

@@ -14,7 +14,7 @@ export const DashboardScript = `
  var logLine=function(el,txt,cls){if(!el)return;var d=document.createElement('div');if(cls)d.className=cls;d.textContent='['+new Date().toTimeString().slice(0,8)+'] '+txt;el.appendChild(d);while(el.childElementCount>400)el.removeChild(el.firstChild);el.scrollTop=el.scrollHeight;};
  var pillKind=function(k){return '<span class="pill '+H(k)+'">'+H(k)+'</span>';};
 
- var WS=null, loadedName='', collecting=false, training=false, checkpoints=[], kindStats=[], lastSystem=null, lossHistory=[], sparkMeta=[], trainStart=0;
+ var WS=null, loadedName='', collecting=false, training=false, checkpoints=[], kindStats=[], lastSystem=null, lossHistory=[], sparkMeta=[], trainStart=0, trainFirstStep=-1;
  var chConv=null, chStreaming=false, chBubble=null, chGotTrace=false;
  var LANGS={oasst:[['all','All languages'],['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['zh','Chinese']],
             wiki:[['en','English'],['ar','Arabic'],['es','Spanish'],['de','German'],['fr','French'],['ru','Russian'],['ja','Japanese']],
@@ -229,11 +229,15 @@ export const DashboardScript = `
   el.innerHTML='<defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>'
    +'<path d="'+d+' L'+W+','+Hh+' L0,'+Hh+' Z" fill="url(#sg)"/><path d="'+d+'" fill="none" stroke="var(--accent)" stroke-width="2"/><circle cx="'+last[0]+'" cy="'+last[1]+'" r="3" fill="var(--accent)"/>';}
  function onTrain(e){var log=Q('t-log');
-  if(e.kind==='train-start'){lossHistory=[];sparkMeta=[];trainStart=Date.now();setTrainBtn(true);Q('t-badge').className='pill run';Q('t-badge').textContent='step 0 / '+e.steps;log.innerHTML='';logLine(log,'training '+e.steps+' steps…','a');drawSpark();}
+  if(e.kind==='train-start'){lossHistory=[];sparkMeta=[];trainStart=Date.now();trainFirstStep=-1;setTrainBtn(true);Q('t-badge').className='pill run';Q('t-badge').textContent='step 0 / '+e.steps;log.innerHTML='';logLine(log,'training '+e.steps+' steps…','a');drawSpark();}
   else if(e.kind==='train-info'){logLine(log,e.text);}
   else if(e.kind==='train-progress'){lossHistory.push(e.trainLoss);sparkMeta.push({s:e.step,ms:e.stepMs});if(lossHistory.length>240){lossHistory.shift();sparkMeta.shift();}drawSpark();
    Q('t-badge').textContent='step '+e.step+' / '+e.steps;Q('t-loss').textContent=e.trainLoss.toFixed(3)+(typeof e.valLoss==='number'?' (val '+e.valLoss.toFixed(3)+')':'');
-   var el=e.elapsedMs||(Date.now()-trainStart);Q('t-elapsed').textContent=fmtDur(el);Q('t-eta').textContent=e.step>0?'~'+fmtDur(el/e.step*(e.steps-e.step))+' left':'';
+   var el=e.elapsedMs||(Date.now()-trainStart);Q('t-elapsed').textContent=fmtDur(el);
+   // ETA divides THIS session's elapsed by the steps done THIS session — a resumed run starts at a
+   // high global step with a fresh clock, and dividing by the global step made 4h read as ~5s.
+   if(trainFirstStep<0)trainFirstStep=e.step;var done=e.step-trainFirstStep+1;
+   Q('t-eta').textContent='~'+fmtDur(el/done*(e.steps-e.step))+' left';
    logLine(log,'step '+e.step+'/'+e.steps+'  loss '+e.trainLoss.toFixed(3)+(typeof e.stepMs==='number'?'  '+e.stepMs+'ms':'')+(typeof e.valLoss==='number'?'  val '+e.valLoss.toFixed(3):''));}
   else if(e.kind==='train-done'){setTrainBtn(false);Q('t-badge').className='pill done';Q('t-badge').textContent='done';logLine(log,'saved to '+e.savedTo+' — reloaded into Chat','ok');}
   else if(e.kind==='train-error'){setTrainBtn(false);var stopped=e.message.indexOf('stop')>=0;Q('t-badge').className='pill '+(stopped?'idle':'err');Q('t-badge').textContent=stopped?'stopped':'error';logLine(log,e.message,stopped?'w':'e');}

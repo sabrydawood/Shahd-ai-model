@@ -71,6 +71,9 @@ export type TrainEvent =
   | { kind: "train-info"; text: string } // corpus / bpe / model setup lines
   | { kind: "train-progress"; step: number; steps: number; trainLoss: number; valLoss?: number; elapsedMs?: number; stepMs?: number }
   | { kind: "train-done"; savedTo: string }
-  | { kind: "train-error"; message: string };
+  // paused: the run stopped GRACEFULLY with a checkpoint saved at the exact step — the server
+  // hot-reloads that checkpoint into the chat model (same as train-done) so "pause -> try it in
+  // chat -> resume" needs no manual model re-pick. A plain error/hard kill leaves the model as-is.
+  | { kind: "train-error"; message: string; paused?: boolean };
 
 export type TrainFn = (Settings: TrainSettings, OnEvent: (Event: TrainEvent) => void, Signal?: AbortSignal) => Promise<void>;

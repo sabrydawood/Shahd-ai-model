@@ -171,7 +171,9 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
     console.log("TrainEmit", Event);
     if (Event.kind === "train-done" || Event.kind === "train-error") {
       TrainJob.Running = false;
-      if (Event.kind === "train-done") {
+      // A graceful pause saved a checkpoint at the exact stop step — hot-reload it like a finished
+      // run, so the chat model IS the paused weights (pause -> try in chat -> resume, no re-pick).
+      if (Event.kind === "train-done" || Event.paused === true) {
         void (async () => {
           await Options.OnTrained?.(TrainJob.Name); // swap the freshly-trained checkpoint into the chat model
           Publish(ModelMsg());
