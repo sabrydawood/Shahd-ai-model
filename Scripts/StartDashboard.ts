@@ -29,6 +29,7 @@ import { FormatTrace, BuildTrace } from "../Brain/Serving/ReasoningTrace.ts";
 import { BuildAgentTooling } from "../Brain/Serving/Tools/ToolsBarrel.ts";
 import { OwnedSystemPrompt } from "../Brain/Sft/OwnedSftData.ts";
 import { ChatTokens } from "../Brain/Sft/ChatTemplate.ts";
+import { ToolTokens } from "../Brain/Serving/ToolProtocol.ts";
 import { ExtractAnswer, NormalizeAnswer, MajorityVote } from "../Brain/Reasoning/ReasoningBarrel.ts";
 import { GenerateAsync } from "../Brain/Sampling/Generate.ts";
 import { DefaultSampling } from "../Brain/Sampling/Sampler.ts";
@@ -121,6 +122,14 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
   // drift; serve them EXACTLY what they were trained on.
   const SystemPrompt = OwnedSystemPrompt;
 
+  // LIVE streaming (the request->response wall): with one run (the default), think text streams into
+  // the trace as it is generated, each tool call surfaces the moment it executes, and the answer
+  // streams into the bubble — the user watches the reasoning happen instead of waiting minutes for
+  // one burst. With self-consistency N>1 the runs are candidates (losers are discarded), so nothing
+  // can stream; those keep the buffered behavior.
+  const Live = SelfConsistencySamples <= 1;
+  let ThinkSeg = 0; // one segment per generation pass => the UI groups think spans per agent step
+
   // One full agent run over a FRESH session (so N self-consistency runs don't contaminate each other).
   const RunOnce = async (): Promise<{ Text: string; Steps: AgentStep[] }> => {
     const Session = new ChatSession(SystemPrompt);
@@ -144,6 +153,38 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
     const Gen = async (Session2: ChatSession): Promise<string> => {
       const Ids = Tokenizer instanceof SpecialTokenizer ? Session2.RenderPromptIds(Tokenizer) : Tokenizer.Encode(Session2.RenderPrompt());
       let SawEndOfTurn = false;
+      // Live split of the growing generation: <|think|>… streams to the trace, the text after
+      // <|endthink|> streams to the answer bubble — but never a tool-call payload (that surfaces as a
+      // structured tool line when it executes). Re-decoding the full slice each token keeps byte-BPE
+      // UTF-8 assembly correct; a trailing replacement char (a split multi-byte char) is held back.
+      const NewIds: number[] = [];
+      const Seg = ThinkSeg++;
+      let SentThink = 0;
+      let SentAnswer = 0;
+      const PushLive = (): void => {
+        if (!Live) return;
+        let T = Tokenizer.Decode(NewIds);
+        const EndT = T.indexOf(ChatTokens.EndOfTurn);
+        if (EndT >= 0) T = T.slice(0, EndT);
+        if (T.endsWith("�")) T = T.slice(0, -1);
+        let Think = "";
+        let After = T;
+        if (T.startsWith(ChatTokens.Think)) {
+          const Close = T.indexOf(ChatTokens.EndThink);
+          Think = Close >= 0 ? T.slice(ChatTokens.Think.length, Close) : T.slice(ChatTokens.Think.length);
+          After = Close >= 0 ? T.slice(Close + ChatTokens.EndThink.length) : "";
+        }
+        const CallIdx = After.indexOf(ToolTokens.CallStart);
+        const Visible = CallIdx >= 0 ? After.slice(0, CallIdx) : After;
+        if (Think.length > SentThink) {
+          Opts.OnThink?.(Think.slice(SentThink), Seg);
+          SentThink = Think.length;
+        }
+        if (Visible.length > SentAnswer) {
+          OnDelta(Visible.slice(SentAnswer));
+          SentAnswer = Visible.length;
+        }
+      };
       const Out = await GenerateAsync(
         Model,
         Ids,
@@ -152,6 +193,8 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
         Rng,
         (Id) => {
           if (EndOfTurnId !== null && Id === EndOfTurnId) SawEndOfTurn = true;
+          else NewIds.push(Id);
+          PushLive();
         },
         () => SawEndOfTurn || Opts.ShouldStop?.() === true,
       );
@@ -162,6 +205,9 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
     const Steps: AgentStep[] = [];
     const Result = await RunAgent(Session, Gen, Tooling.Registry, Tooling.MaxSteps, Tooling.Context, (Step) => {
       Steps.push(Step);
+      // Surface each tool call/result the moment it happens — the live half of the trace; think and
+      // answer text stream separately above. The final BuildTrace below remains authoritative.
+      if (Live) for (const L of BuildTrace([Step])) if (L.Kind === "tool") Opts.OnToolStep?.(L);
     });
     return { Text: Result.FinalText, Steps };
   };
@@ -182,7 +228,7 @@ async function ServeChatAgent(Loaded: RunnableModel, Messages: ChatMessage[], Op
 
   console.log(`[chat] reasoning trace:\n${FormatTrace(Best.Steps)}`);
   Opts.OnTrace?.(BuildTrace(Best.Steps)); // surface the trace to the dashboard UI (the visible reasoning lens)
-  OnDelta(Best.Text);
+  if (!Live) OnDelta(Best.Text); // live runs already streamed the answer token-by-token
   return Best.Text;
 }
 

@@ -379,6 +379,14 @@ export function CreateDashboardParts(Store: DocumentStore, Learn?: LearnFn, Opti
         OnTrace: (Lines: unknown): void => {
           Socket.send(JSON.stringify({ type: "chat-trace", convId: ConvId, lines: Lines })); // the visible reasoning steps
         },
+        // Live reasoning: think text streams as it is generated (seg groups spans per agent step) and
+        // each tool call surfaces when it executes — the user watches the model reason in real time.
+        OnThink: (Delta: string, Seg: number): void => {
+          Socket.send(JSON.stringify({ type: "chat-think-delta", convId: ConvId, delta: Delta, seg: Seg }));
+        },
+        OnToolStep: (Line: unknown): void => {
+          Socket.send(JSON.stringify({ type: "chat-tool", convId: ConvId, line: Line }));
+        },
       };
       await Chat.Turn(ConvId, Msg.message, Opts, (Delta) => Socket.send(JSON.stringify({ type: "chat-delta", convId: ConvId, delta: Delta })));
       Socket.send(JSON.stringify({ type: "chat-done", convId: ConvId }));

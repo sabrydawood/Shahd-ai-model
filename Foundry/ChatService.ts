@@ -9,7 +9,17 @@ import type { ChatStore, ChatMessage } from "./ChatStore.ts";
 // structurally identical to Brain's TraceLine but declared here so ChatService stays decoupled from
 // the model layer. Surfaced to the UI so the operator SEES how the model reasoned, not just its reply.
 export type ChatTraceLine = { Step: number; Kind: string; Text: string; Detail?: string };
-export type ChatOpts = { Temperature: number; MaxTokens: number; ShouldStop?: () => boolean; OnTrace?: (Lines: ChatTraceLine[]) => void };
+// OnThink/OnToolStep stream the reasoning LIVE while the model generates (think text token-by-token,
+// each tool call the moment it executes); OnTrace still delivers the final authoritative trace.
+// Segment increments per generation pass within one turn so the UI can group think spans.
+export type ChatOpts = {
+  Temperature: number;
+  MaxTokens: number;
+  ShouldStop?: () => boolean;
+  OnTrace?: (Lines: ChatTraceLine[]) => void;
+  OnThink?: (Delta: string, Segment: number) => void;
+  OnToolStep?: (Line: ChatTraceLine) => void;
+};
 export type ChatStreamFn = (Messages: ChatMessage[], Opts: ChatOpts, OnDelta: (Delta: string) => void) => Promise<string>;
 
 function TitleFrom(Message: string): string {
