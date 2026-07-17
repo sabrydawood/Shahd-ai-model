@@ -166,6 +166,12 @@ export const DashboardStyles = `
  .step .b.tool{background:color-mix(in srgb,var(--accent) 15%,transparent);color:var(--accent)}
  .step .b.answer{background:color-mix(in srgb,var(--good) 15%,transparent);color:var(--good)}
  .step .x{font-family:var(--mono);color:var(--text);word-break:break-word} .step .x .dt{color:var(--mut)}
+ .trhist{margin-top:8px;border-top:1px dashed var(--line);padding-top:6px}
+ .trhist summary{cursor:pointer;font-size:11.5px;color:var(--mut);user-select:none;list-style:none}
+ .trhist summary::-webkit-details-marker{display:none}
+ .trhist summary:hover{color:var(--text)}
+ .trhist[open] summary{margin-bottom:7px}
+ .trhist .trsteps{display:flex;flex-direction:column;gap:7px;white-space:normal} /* .bub is pre-wrap; trace steps must render like the side panel */
 
  .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);align-items:center;justify-content:center;z-index:60;padding:20px}
  .modal.open{display:flex}

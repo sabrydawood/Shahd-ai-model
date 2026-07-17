@@ -74,8 +74,18 @@ export class ChatService {
       await this.Store.AddMessage(ConvId, "user", Message, At);
 
       const Context: ChatMessage[] = [...History, { Role: "user", Content: Message }];
-      const Reply = await this.Stream(Context, Opts, OnDelta);
-      await this.Store.AddMessage(ConvId, "assistant", Reply, this.Now());
+      // Capture the turn's reasoning trace and persist it WITH the assistant message — every past
+      // reply stays inspectable (how did it decide?), which is the lens for finding weaknesses.
+      let Captured: ChatTraceLine[] | null = null;
+      const WrappedOpts: ChatOpts = {
+        ...Opts,
+        OnTrace: (Lines): void => {
+          Captured = Lines;
+          Opts.OnTrace?.(Lines);
+        },
+      };
+      const Reply = await this.Stream(Context, WrappedOpts, OnDelta);
+      await this.Store.AddMessage(ConvId, "assistant", Reply, this.Now(), Captured);
       return Reply;
     });
   }

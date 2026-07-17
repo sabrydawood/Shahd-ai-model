@@ -1,7 +1,7 @@
 // In-memory ChatStore — the dependency-free fallback used when no DATABASE_URL is set (chat memory
 // then lasts only for the process lifetime). Same interface as the Postgres store.
 
-import type { ChatStore, ConversationSummary, ChatMessage } from "./ChatStore.ts";
+import type { ChatStore, ConversationSummary, ChatMessage, ChatTraceStep } from "./ChatStore.ts";
 
 type Conv = { Title: string; UpdatedAt: string; Messages: ChatMessage[] };
 
@@ -22,10 +22,10 @@ export class InMemoryChatStore implements ChatStore {
     return (this.Convs.get(ConvId)?.Messages ?? []).map((M) => ({ ...M }));
   }
 
-  async AddMessage(ConvId: string, Role: "user" | "assistant", Content: string, At: string): Promise<void> {
+  async AddMessage(ConvId: string, Role: "user" | "assistant", Content: string, At: string, Trace?: ChatTraceStep[] | null): Promise<void> {
     const C = this.Convs.get(ConvId);
     if (C === undefined) return;
-    C.Messages.push({ Role, Content });
+    C.Messages.push({ Role, Content, ...(Trace != null && Trace.length > 0 ? { Trace } : {}) });
     C.UpdatedAt = At;
   }
 

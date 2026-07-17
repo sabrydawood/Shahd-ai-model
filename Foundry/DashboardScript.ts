@@ -270,12 +270,17 @@ export const DashboardScript = `
  function chInit(){chModelOptions();chLoadHistory();if(!chConv)chNew();}
  function chPick(name){if(name&&wsReady()){WS.send(JSON.stringify({type:'load-model',name:name}));Q('ch-stat').textContent='loading '+name+'…';}}
  function chBubbleEl(role,text,cls){var d=document.createElement('div');d.className='bub '+(cls||role);d.innerHTML='<div class="who">'+H(role)+'</div>';var t=document.createElement('div');t.textContent=text;d.appendChild(t);var box=Q('ch-bubbles');box.appendChild(d);box.scrollTop=box.scrollHeight;return {wrap:d,txt:t};}
+ // Persisted per-message reasoning (Claude-Code style): a collapsible under each model bubble — any
+ // past reply can be reopened to see HOW it decided (think -> tool -> answer).
+ function chStepHtml(L){var k=(L.Kind==='think'||L.Kind==='tool'||L.Kind==='answer')?L.Kind:'answer';return '<div class="step"><span class="b '+k+'">'+k+'</span><span class="x">'+H(L.Text)+(L.Detail?' <span class="dt">→ '+H(L.Detail)+'</span>':'')+'</span></div>';}
+ function chAttachTrace(wrap,lines){if(!lines||!lines.length)return;var old=wrap.querySelector('.trhist');if(old)old.remove();
+  var d=document.createElement('details');d.className='trhist';d.innerHTML='<summary>⚙ reasoning · '+lines.length+' step'+(lines.length>1?'s':'')+'</summary><div class="trsteps">'+lines.map(chStepHtml).join('')+'</div>';wrap.appendChild(d);}
  function chNew(){chConv=uuid();Q('ch-bubbles').innerHTML='<div class="empty">say something to test the model</div>';Q('ch-trace').innerHTML='<div class="empty">the model steps (think → tool → answer) appear here after a reply</div>';Q('ch-stat').textContent='';var h=Q('ch-history');if(h)h.value='';}
  async function chLoadHistory(){try{var list=await (await fetch('/api/chat/conversations')).json();var sel=Q('ch-history');if(!sel)return;sel.innerHTML='<option value="">— '+list.length+' past chats —</option>'+list.map(function(c){return '<option value="'+H(c.Id)+'">'+H(c.Title)+'</option>';}).join('');if(chConv)sel.value=chConv;}catch(e){}}
  async function chOpen(id){if(!id||chStreaming)return;chConv=id;
   try{var msgs=await (await fetch('/api/chat/conversation?id='+encodeURIComponent(id))).json();Q('ch-bubbles').innerHTML='';
    if(!msgs.length)Q('ch-bubbles').innerHTML='<div class="empty">empty conversation</div>';
-   else msgs.forEach(function(m){chBubbleEl(m.Role==='assistant'?'model':'you',m.Content,m.Role==='assistant'?'model':'u');});
+   else msgs.forEach(function(m){var b=chBubbleEl(m.Role==='assistant'?'model':'you',m.Content,m.Role==='assistant'?'model':'u');if(m.Role==='assistant'&&m.Trace)chAttachTrace(b.wrap,m.Trace);});
   }catch(e){Q('ch-bubbles').innerHTML='<div class="empty">failed to load</div>';}
   Q('ch-trace').innerHTML='<div class="empty">the reasoning trace shows for the NEXT reply</div>';}
  async function chDelCur(){if(!chConv)return;if(!confirm('Delete this conversation permanently?'))return;
@@ -315,7 +320,7 @@ export const DashboardScript = `
     if(chThinkEl)chThinkEl.querySelector('.x').textContent+=m.delta;tr.scrollTop=tr.scrollHeight;}
    else if(m.type==='chat-tool'&&m.convId===chConv){chGotTrace=true;var tr2=Q('ch-trace');if(chThinkSeg===-1){tr2.innerHTML='';chThinkSeg=-2;}
     var td=document.createElement('div');td.className='step';td.innerHTML='<span class="b tool">tool</span><span class="x">'+H(m.line.Text)+(m.line.Detail?' <span class="dt">→ '+H(m.line.Detail)+'</span>':'')+'</span>';tr2.appendChild(td);tr2.scrollTop=tr2.scrollHeight;}
-   else if(m.type==='chat-trace'&&m.convId===chConv){chGotTrace=true;chTrace(m.lines);}
+   else if(m.type==='chat-trace'&&m.convId===chConv){chGotTrace=true;chTrace(m.lines);if(chBubble)chAttachTrace(chBubble.wrap,m.lines);}
    else if(m.type==='chat-done'&&m.convId===chConv){Q('ch-stat').textContent='';if(!chGotTrace)Q('ch-trace').innerHTML='<div class="empty">this is a BASE model — it replies directly, with no think/tool steps. Train a Chat/SFT model (Train ▸ Chat) to see the reasoning trace.</div>';chEnd();chLoadHistory();}
    else if(m.type==='chat-error'&&m.convId===chConv){if(chBubble){chBubble.wrap.className='bub err';chBubble.txt.textContent='error: '+m.error;}Q('ch-stat').textContent='';chEnd();}
   };}
