@@ -63,12 +63,16 @@ const ConvCount = Number(ReadArg("--ConvCount=", "4000"));
 const ArithmeticCount = Number(ReadArg("--Arithmetic=", "2000"));
 const ThinkingCount = Number(ReadArg("--Thinking=", "800"));
 const CodeConvs = Number(ReadArg("--CodeConvs=", "800"));
+// Multi-turn stitched conversations — the turn-transition coverage single exchanges can't teach.
+// Weighted at ~15% of a default mix so "answer the NEXT question after a finished exchange" is a
+// first-class behavior, not a rarity.
+const MultiTurn = Number(ReadArg("--MultiTurn=", "1500"));
 const Stores = ResolveFoundryStores();
 const CodeDocs = await Stores.Kind("code").ByTier("Filtered", CodeSamples);
 const ConvDocs = await Stores.Kind("conversation").ByTier("Filtered", ConvCount);
 const Samples: CodeSample[] = CodeDocs.map((D) => ({ Lang: D.Lang, Content: D.Content }));
 const Rng = CreateRngStreams(1234);
-const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { ArithmeticCount, ThinkingCount, PersonaRepeats: 25, MaxCodeConversations: CodeConvs });
+const Conversations = BuildOwnedConversations(Samples, Rng.DataRng, { ArithmeticCount, ThinkingCount, PersonaRepeats: 25, MaxCodeConversations: CodeConvs, MultiTurnCount: MultiTurn });
 
 // Parse each collected conversation doc ("User: …\n\nAssistant: …") into an SFT example so the chat
 // model learns from real dialogue — the link that makes "collect conversation data -> the model talks".

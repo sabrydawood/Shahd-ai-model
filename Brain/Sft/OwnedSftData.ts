@@ -131,6 +131,32 @@ function ThinkingConversation(Rng: SeededRng): ChatMessage[] {
   ];
 }
 
+// The transition a single-exchange corpus never teaches: a COMPLETED assistant turn followed by a
+// NEW user question. Without it, the second message of any conversation is out-of-distribution and
+// the model collapses to its most frequent opener (a greeting). Each multi-turn conversation
+// stitches 2-3 short owned exchanges under ONE system message; the exchanges reuse the exact same
+// builders (identical wording) as the single-turn data, so this adds ONLY the turn transition, not
+// a new content distribution. Code-ID exchanges are excluded — their snippets would blow the block
+// budget of a stitched conversation.
+function MultiTurnConversation(Rng: SeededRng): ChatMessage[] {
+  const Exchanges = 2 + Math.floor(Rng.NextFloat() * 2); // 2..3 exchanges
+  const Out: ChatMessage[] = [{ Role: "System", Content: System }];
+  for (let E = 0; E < Exchanges; E++) {
+    const Pick = Rng.NextFloat();
+    let Msgs: ChatMessage[];
+    if (Pick < 0.4) {
+      const [User, Thinking, Reply] = Persona[Math.floor(Rng.NextFloat() * Persona.length)]!;
+      Msgs = Owned(User, Thinking, Reply);
+    } else if (Pick < 0.8) {
+      Msgs = ArithmeticToolConversation(Rng);
+    } else {
+      Msgs = ThinkingConversation(Rng);
+    }
+    for (const M of Msgs) if (M.Role !== "System") Out.push(M);
+  }
+  return Out;
+}
+
 export type CodeSample = { Lang: string; Content: string };
 
 // Language identification over a REAL snippet — a truthful, corpus-grounded task.
@@ -143,7 +169,7 @@ function CodeLangConversation(Sample: CodeSample): ChatMessage[] {
   );
 }
 
-export type OwnedSftOptions = { ArithmeticCount?: number; ThinkingCount?: number; PersonaRepeats?: number; MaxCodeConversations?: number };
+export type OwnedSftOptions = { ArithmeticCount?: number; ThinkingCount?: number; PersonaRepeats?: number; MaxCodeConversations?: number; MultiTurnCount?: number };
 
 /** Build the full owned SFT conversation set (each item is one system/user/assistant conversation).
  *  Deterministic given the same Rng + code samples. */
@@ -152,11 +178,13 @@ export function BuildOwnedConversations(CodeSamples: CodeSample[], Rng: SeededRn
   const ThinkingCount = Options.ThinkingCount ?? 100;
   const PersonaRepeats = Options.PersonaRepeats ?? 20;
   const MaxCodeConversations = Options.MaxCodeConversations ?? 1500;
+  const MultiTurnCount = Options.MultiTurnCount ?? 300;
 
   const Out: ChatMessage[][] = [];
   for (let R = 0; R < PersonaRepeats; R++) for (const [User, Thinking, Reply] of Persona) Out.push(Owned(User, Thinking, Reply));
   for (let I = 0; I < ArithmeticCount; I++) Out.push(ArithmeticToolConversation(Rng));
   for (let I = 0; I < ThinkingCount; I++) Out.push(ThinkingConversation(Rng));
+  for (let I = 0; I < MultiTurnCount; I++) Out.push(MultiTurnConversation(Rng));
   for (const Exemplar of ToolUseExemplars) for (let R = 0; R < 10; R++) Out.push(BuildToolConversation(Exemplar, System));
   let Added = 0;
   for (const Sample of CodeSamples) {

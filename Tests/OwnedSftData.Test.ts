@@ -53,6 +53,32 @@ test("identity coverage: 'who are you?' variants answer with the canonical ident
   }
 });
 
+test("multi-turn: stitched conversations teach the completed-turn -> next-question transition", () => {
+  const All = BuildOwnedConversations([], new SeededRng(7), { ArithmeticCount: 0, ThinkingCount: 0, PersonaRepeats: 0, MaxCodeConversations: 0, MultiTurnCount: 40 });
+  // The 5 fixed tool exemplars x10 are always present; a stitched conversation is the one with >= 2
+  // REAL user questions (tool-result user messages don't count).
+  const Convos = All.filter((C) => C.filter((M) => M.Role === "User" && !M.Content.startsWith(ToolTokens.ResultStart)).length >= 2);
+  expect(Convos.length).toBe(40);
+  let SawTransition = 0;
+  for (const C of Convos) {
+    // Exactly ONE system message, at the front — stitching must not duplicate it mid-conversation.
+    expect(C[0]!.Role).toBe("System");
+    expect(C.filter((M) => M.Role === "System").length).toBe(1);
+    // Ends with a completed assistant turn, and every assistant turn thinks first (unified recipe).
+    expect(C[C.length - 1]!.Role).toBe("Assistant");
+    for (const M of C) if (M.Role === "Assistant") expect(M.Content.startsWith(ChatTokens.Think)).toBe(true);
+    // No code-ID snippets inside a stitched conversation (block-size budget guard).
+    expect(C.some((M) => M.Content.startsWith("What programming language"))).toBe(false);
+    // The transition being taught: an assistant turn followed by a NEW user question — i.e. a user
+    // message that is NOT a tool result being fed back.
+    for (let I = 0; I + 1 < C.length; I++) {
+      if (C[I]!.Role === "Assistant" && C[I + 1]!.Role === "User" && !C[I + 1]!.Content.startsWith(ToolTokens.ResultStart)) SawTransition++;
+    }
+  }
+  // 2-3 exchanges per conversation means every conversation carries >= 1 such transition.
+  expect(SawTransition).toBeGreaterThanOrEqual(40);
+});
+
 test("BuildOwnedConversations is deterministic for a given seed + samples", () => {
   const A = BuildOwnedConversations(Samples, new SeededRng(7), { ArithmeticCount: 8, ThinkingCount: 3, PersonaRepeats: 2, MaxCodeConversations: 5 });
   const B = BuildOwnedConversations(Samples, new SeededRng(7), { ArithmeticCount: 8, ThinkingCount: 3, PersonaRepeats: 2, MaxCodeConversations: 5 });
